@@ -29,6 +29,13 @@ import { Help, isHelpKey } from "./help/help.js";
 const LOOPS_SHOWN = 8, FOLDERS_SHOWN = 10;
 // Context folders on a machine: its repos, plus ~/.config ($HOME is that machine's own).
 const FOLDERS_SH = 'find "$HOME/repos" -mindepth 1 -maxdepth 1 -type d ! -name ".*" 2>/dev/null | sort; echo "$HOME/.config"';
+const PLACEHOLDER = {
+  ask: "Search your loops, or describe something new…  (? for controls)",
+  machine: "Enter picks the machine under the cursor",
+  goal: "What is this loop for?",
+  context: "Search folders and projects; Tab adds one",
+  review: "Edit the selected line",
+};
 const base = (p) => p.split("/").filter(Boolean).pop() ?? p;
 
 export default class OmniloopPicker extends View {
@@ -51,16 +58,12 @@ export default class OmniloopPicker extends View {
     this.error = null;
     this.watcher = null;
     this.keysHelp = new Help(KEYS, { title: "Omniloop controls", mod: "omniloop-picker" });
-    this.input = InputState.new({ placeholder: "Search your loops, or describe something new…  (? for controls)" });
-    this.input.on("change", (_e, cx) => this.changed(cx));
-    // ⌘↵ (a secondary submit) starts a new loop from whatever is typed, from the search step.
-    this.input.on("submit", (e, cx) => (e?.secondary && this.step === "ask" ? this.startNew(this.query, cx) : this.enter(cx)));
-    this.input.focus();
+    this.makeInput("ask", "");
     cx.timer.after(400, () => { if (!this.keysHelp.shown) this.input.focus(); });
     // Test hook: a test home's shared.json can pre-fill {"omniloop-picker.test": {query, step, goal, picked, projects, help}}.
     const seed = shared("omniloop-picker.test");
     if (seed) {
-      if (seed.step && seed.step !== "ask") { this.step = seed.step; this.fresh = { goal: seed.goal ?? "", proposal: seed.proposal ?? null, pending: false, field: "id" }; this.picked = seed.picked ?? []; this.pickedProjects = seed.projects ?? []; if (seed.proposal) { this.useProposal(seed.proposal); this.input.set_value(this.fresh.id); this.query = this.fresh.id; } }
+      if (seed.step && seed.step !== "ask") { this.step = seed.step; this.fresh = { goal: seed.goal ?? "", proposal: seed.proposal ?? null, pending: false, field: "id" }; this.picked = seed.picked ?? []; this.pickedProjects = seed.projects ?? []; if (seed.proposal) this.useProposal(seed.proposal); this.makeInput(seed.step, this.fresh.id ?? ""); this.query = this.fresh.id ?? ""; }
       if (seed.query) { this.input.set_value(seed.query); this.query = seed.query; }
       if (seed.help) this.keysHelp.open(cx);
     }
@@ -68,12 +71,16 @@ export default class OmniloopPicker extends View {
     cx.spawn(async (cx) => {
       const raw = await readTextFile(`${home()}/.cache/omniloop/state.json`).catch(() => null);
       try { this.watcher = raw ? JSON.parse(raw) : null; } catch {}
-      try { this.index = JSON.parse((await exec(`${BIN}/omniloop`, ["index"], { timeout: 10000 })).stdout || "[]"); } catch {}
-      cx.notify();
       try {
         const r = await exec(this.hc(), ["machine", "ls", "--json"], { timeout: 10000 });
         this.machines = (JSON.parse(r.stdout || "{}").machines ?? []).filter((m) => m.state === "connected").map((m) => m.name);
       } catch {}
+      this.machinesKnown = true;
+      // ⌘↵ pressed before the machines were known: go on now, so the machine step isn't skipped.
+      if (this.pendingNew != null) { const g = this.pendingNew; this.pendingNew = null; this.startNew(g, cx); }
+      cx.notify();
+      try { this.index = JSON.parse((await exec(`${BIN}/omniloop`, ["index"], { timeout: 10000 })).stdout || "[]"); } catch {}
+      cx.notify();
       await this.loadContext(null);
       cx.notify();
     });
@@ -82,6 +89,15 @@ export default class OmniloopPicker extends View {
   }
 
   hc() { return `${home()}/.local/bin/hc`; }
+
+  /** A fresh text box for a step, so each step has its own placeholder. */
+  makeInput(step, value) {
+    this.input = InputState.new({ placeholder: PLACEHOLDER[step] ?? "", value: value ?? "" });
+    this.input.on("change", (_e, cx) => this.changed(cx));
+    // ⌘↵ (a secondary submit) starts a new loop from whatever is typed, from the search step.
+    this.input.on("submit", (e, cx) => { e?.secondary && this.step === "ask" ? this.startNew(this.query, cx) : this.enter(cx); cx.notify(); });
+    this.input.focus();
+  }
   close() { const id = props()?.overlay; if (id) closeOverlay(id); }
   pins() { return sanitizePins(shared(PINS_KEY)); }
 
@@ -128,6 +144,7 @@ export default class OmniloopPicker extends View {
   // ---- the new-loop steps ----
 
   startNew(goal, cx) {
+    if (!this.machinesKnown) { this.pendingNew = String(goal ?? ""); this.error = "Checking your machines…"; return; }
     this.fresh = { goal: String(goal ?? "").trim(), proposal: null, pending: false, field: "id" };
     this.error = null; this.picked = []; this.pickedProjects = [];
     this.go(this.machines.length ? "machine" : "goal", this.machines.length ? "" : this.fresh.goal, cx);
@@ -135,7 +152,7 @@ export default class OmniloopPicker extends View {
 
   go(step, text, cx) {
     this.step = step; this.at = 0;
-    this.input.set_value(text ?? ""); this.query = text ?? "";
+    this.makeInput(step, text ?? ""); this.query = text ?? "";
     cx.notify();
   }
 
@@ -154,12 +171,15 @@ export default class OmniloopPicker extends View {
     const on = (script) => machine
       ? exec(this.hc(), ["exec", "--on", machine, "--", "/bin/zsh", "-lc", script], { timeout: 15000 })
       : exec("sh", ["-c", script], { timeout: 10000 });
-    this.folders = []; this.projects = [];
-    try { this.folders = (await on(FOLDERS_SH)).stdout.split("\n").filter(Boolean); } catch {}
+    let folders = [], projects = [];
+    try { folders = (await on(FOLDERS_SH)).stdout.split("\n").filter(Boolean); } catch {}
     try {
       const r = machine ? await on("omniloop project ls --json") : await exec(`${BIN}/omniloop`, ["project", "ls", "--json"], { timeout: 10000 });
-      this.projects = JSON.parse(r.stdout || "[]");
+      projects = JSON.parse(r.stdout || "[]");
     } catch {}
+    // A late answer for a machine no longer chosen is dropped: one machine's paths never show (or go) to another.
+    if (this.machine !== machine) return;
+    this.folders = folders; this.projects = projects;
   }
 
   pickMachine(name, cx) {
@@ -205,7 +225,7 @@ export default class OmniloopPicker extends View {
     if (this.step === "machine") return machineRows(this.machines, this.machine);
     if (this.step === "goal") {
       const g = this.query.trim();
-      return [{ kind: "continue", goal: g }, ...suggestLoops(this.entries(), g).map((entry) => ({ kind: "loop", entry, why: "might already cover this" }))];
+      return [{ kind: "continue", goal: g }, ...suggestLoops(this.entries(), g).map((entry) => ({ kind: "loop", entry, why: null }))];
     }
     if (this.step === "context") return [...projectRows(this.projects, this.query, this.pickedProjects), ...folderRows(this.folders, this.query, this.picked)];
     if (this.step === "review" || this.step === "creating") {
@@ -445,13 +465,17 @@ export default class OmniloopPicker extends View {
         .child(v_flex().gap(6)
           .child(div().text_size(30).font_semibold().text_color(t.foreground).child(title))
           .child(div().text_size(14).text_color(t.muted).truncate().child(sub ?? "")))
-        .when(this.step !== "machine", (el) => el.child(h_flex().h(54).px(18).gap(12).items_center().rounded(14).border(1.5).border_color(t.accent).bg(t.raised)
+        .child((() => { const el = h_flex().h(54).px(18).gap(12).items_center().rounded(14).border(1.5).border_color(t.accent).bg(t.raised)
           .child(svg("mods/workspace-chrome/search.svg").size(18).text_color(t.dim))
-          .child(Input.new(this.input).flex_1().h_full().text_size(18).text_color(t.foreground))))
+          .child(Input.new(this.input).flex_1().h_full().text_size(18).text_color(t.foreground)); return el; })())
         .when(Boolean(this.error), (el) => el.child(div().px(4).text_size(12).text_color(t.blocked).child(this.error)))
         .when(this.step === "context" && this.folders.length === 0, (el) => el.child(div().px(4).text_size(12).text_color(t.dim).child("Looking for folders…")))
-        .when(this.step === "goal" && rows.length > 1, (el) => el.child(div().px(4).pt(4).text_size(11).font_semibold().text_color(t.dim).child("ALREADY A LOOP FOR THIS?")))
-        .child(v_flex().gap(6).children(shown.map((r, k) => this.row(t, r, start + k === at, start + k))))
+        .child(v_flex().gap(6).children(shown.flatMap((r, k) => {
+          const el = this.row(t, r, start + k === at, start + k);
+          // Goal step: the suggestions sit under a label, after the Continue row.
+          return this.step === "goal" && r.kind === "continue" && rows.length > 1
+            ? [el, div().px(4).pt(10).text_size(11).font_semibold().text_color(t.dim).child("ALREADY A LOOP FOR THIS?")] : [el];
+        })))
         .when(rows.length > shown.length, (el) => el.child(div().px(4).text_size(11.5).text_color(t.dim).child(`${rows.length - shown.length} more; keep typing to narrow`))))
       .child(div().flex_1())
       .child(h_flex().pb(22).gap(10).items_center()
