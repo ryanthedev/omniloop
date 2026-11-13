@@ -95,3 +95,9 @@ test("sentTo reads the target of hc send and omniloop send", () => {
   assert.equal(sentTo("echo hi"), null);
   assert.equal(sentTo(undefined), null);
 });
+
+test("an early report in a long turn doesn't swallow the finished note", async () => {
+  const { alreadyReported, REPORT_NEAR_END_MS } = await import("../core/deliver.js");
+  assert.equal(alreadyReported({ startedAt: 0, reportedAt: 10, endedAt: 10 + REPORT_NEAR_END_MS + 1, reportedTo: "t1" }, "t1"), false);
+  assert.equal(alreadyReported({ startedAt: 0, reportedAt: 10, endedAt: 20, reportedTo: "t1" }, "t1"), true);
+});

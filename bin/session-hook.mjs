@@ -7,7 +7,7 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { addressOf, pidOf, sessionRecord, turnStart, turnEnd, turnReport } from "../core/turns.js";
+import { addressOf, pidOf, sessionRecord, turnStart, turnEnd, turnReport, foreign } from "../core/turns.js";
 
 const quiet = () => process.exit(0);
 process.on("uncaughtException", quiet);
@@ -29,6 +29,8 @@ try {
   const now = Date.now(), pid = pidOf(process.env, process.ppid);
   const ctx = { address, pid, input, now };
   const ev = input.hook_event_name;
+  const alive = (p) => { try { process.kill(p, 0); return true; } catch (e) { return e.code === "EPERM"; } };
+  if (foreign(read(join(sessions, `${address}.json`)), ctx, alive)) quiet();
   if (ev === "SessionStart" || ev === "UserPromptSubmit") {
     write(sessions, address, sessionRecord(read(join(sessions, `${address}.json`)), ctx));
     if (ev === "UserPromptSubmit") write(turns, address, turnStart(read(join(turns, `${address}.json`)), ctx));

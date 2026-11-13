@@ -910,7 +910,7 @@ const parsed = parseArgs(argv);
 async function cmdSend({ flags, rest }) {
   const [to, ...words] = rest;
   if (!to || !words.length) die('usage: omniloop send <to> "<text>"   (<to>: address, session name, pid; see omniloop sessions)');
-  let from = typeof flags.from === "string" ? flags.from : me();
+  let from = me();
   if (!from && process.env.CLAUDE_CODE_MESSAGING_SOCKET) from = (await liveSessions()).find((x) => x.messagingSocketPath === process.env.CLAUDE_CODE_MESSAGING_SOCKET)?.name ?? null;
   try {
     // Never typed (see deliver's typed option): your words arrive labelled as yours, or not at all.

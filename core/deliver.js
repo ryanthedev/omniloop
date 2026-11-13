@@ -129,9 +129,13 @@ export function turnText(text, max = TURN_TEXT_MAX) {
  * Did the agent already report this turn to whoever the note is for? Then a "finished its turn" note is a duplicate.
  * rec: the turn record; to: the note's recipient address.
  */
+/** A report counts as the turn's own report only this close to the turn's end (an early "starting" doesn't). */
+export const REPORT_NEAR_END_MS = 60_000;
+
 export function alreadyReported(rec, to) {
   if (!rec || !Number.isFinite(rec.reportedAt)) return false;
   if (Number.isFinite(rec.startedAt) && rec.reportedAt < rec.startedAt) return false;
+  if (Number.isFinite(rec.endedAt) && rec.endedAt - rec.reportedAt > REPORT_NEAR_END_MS) return false;
   return !to || !rec.reportedTo || rec.reportedTo === to;
 }
 

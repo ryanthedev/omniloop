@@ -28,7 +28,8 @@ export function pidOf(env, ppid) {
 
 /** The session record after a SessionStart / UserPromptSubmit. mode: this event's permission_mode, else the last one seen. */
 export function sessionRecord(prev, { address, pid, input, now }) {
-  return { address, pid, sessionId: input.session_id ?? null, mode: input.permission_mode ?? prev?.mode ?? null, cwd: input.cwd ?? null, at: now };
+  const same = prev?.sessionId != null && prev.sessionId === input.session_id;
+  return { address, pid, sessionId: input.session_id ?? null, mode: input.permission_mode ?? (same ? prev.mode : null) ?? null, cwd: input.cwd ?? null, at: now };
 }
 
 /** The turn record after a UserPromptSubmit: a new turn begins (existing fields kept, the report marks cleared). */
@@ -39,7 +40,8 @@ export function turnStart(prev, { address, pid, input, now }) {
 
 /** The turn record after a Stop: the turn ended, with the last reply (capped). */
 export function turnEnd(prev, { address, pid, input, now }) {
-  const text = typeof input.last_assistant_message === "string" ? Array.from(input.last_assistant_message).slice(0, TEXT_MAX).join("") : (prev?.text ?? null);
+  // No carry-over: a Stop without a reply must not leave the previous turn's words to be quoted as this one's.
+  const text = typeof input.last_assistant_message === "string" ? Array.from(input.last_assistant_message).slice(0, TEXT_MAX).join("") : null;
   return { ...prev, address, pid, sessionId: input.session_id ?? prev?.sessionId ?? null, mode: input.permission_mode ?? prev?.mode ?? null, endedAt: now, text };
 }
 
@@ -48,4 +50,13 @@ export function turnReport(prev, { input, now }) {
   if (input.tool_name !== "Bash") return null;
   const to = sentTo(input.tool_input?.command);
   return to ? { ...prev, reportedAt: now, reportedTo: to } : null;
+}
+
+/**
+ * Does this hook belong to someone else's record? A \`claude\` started inside a member's terminal inherits its
+ * HC_TERMINAL_ID: while the member's session (another session id, a live pid) owns the address, the nested one
+ * must not overwrite its records. alive(pid) -> boolean.
+ */
+export function foreign(prev, { input, pid }, alive) {
+  return Boolean(prev?.sessionId && input.session_id && prev.sessionId !== input.session_id && prev.pid !== pid && alive(prev.pid));
 }

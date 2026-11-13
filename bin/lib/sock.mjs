@@ -102,7 +102,9 @@ export async function locate(target) {
   const hook = hooks[target] ?? Object.values(hooks).find((h) => r.session && h.pid === r.session.pid) ?? null;
   const looksLikeAddress = /^[a-z][a-z0-9]*$/i.test(String(target)) && !r.session;
   // Unknown mode is not "prompting": a bypass session reached by name must still get hc, so read its transcript.
-  const mode = hook?.mode ?? (r.session ? await modeFromTranscript(r.session) : null);
+  const turn = hook ? await turnRecord(hook.address) : null;
+  const fresher = turn?.mode && turn.sessionId === hook?.sessionId && (turn.endedAt ?? turn.startedAt ?? 0) > (hook?.at ?? 0) ? turn.mode : null;
+  const mode = fresher ?? hook?.mode ?? (r.session ? await modeFromTranscript(r.session) : null);
   return { session: r.session ?? null, address: hook?.address ?? (looksLikeAddress ? String(target) : null), mode, error: r.error };
 }
 

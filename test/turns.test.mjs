@@ -29,9 +29,9 @@ test("pidOf: CLAUDE_PID, else the parent", () => {
 
 const ctx = (input, now = 100) => ({ address: "t9", pid: 42, input, now });
 
-test("sessionRecord keeps the previous mode when the event has none", () => {
+test("sessionRecord keeps the previous mode when the event has none (same session only)", () => {
   const i = { session_id: "s1", cwd: "/w" };
-  assert.deepEqual(sessionRecord({ mode: "plan" }, ctx(i)), { address: "t9", pid: 42, sessionId: "s1", mode: "plan", cwd: "/w", at: 100 });
+  assert.deepEqual(sessionRecord({ sessionId: "s1", mode: "plan" }, ctx(i)), { address: "t9", pid: 42, sessionId: "s1", mode: "plan", cwd: "/w", at: 100 });
   assert.equal(sessionRecord(null, ctx(i)).mode, null);
   assert.equal(sessionRecord({ mode: "plan" }, ctx({ ...i, permission_mode: "default" })).mode, "default");
 });
@@ -80,4 +80,15 @@ test("bin/session-hook.mjs writes the session and turn records over a turn", () 
     // Garbage in: still exit 0, nothing thrown.
     assert.equal(spawnSync("node", [HOOK], { input: "not json", env: { ...process.env, OMNILOOP_HOME: home } }).status, 0);
   } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("review fixes: no reply carried over, mode not inherited across sessions, nested claude can't take the address", async () => {
+  const { turnEnd, sessionRecord, foreign } = await import("../core/turns.js");
+  const ctx = (input) => ({ address: "t9", pid: 2, input, now: 5 });
+  assert.equal(turnEnd({ text: "old" }, ctx({ session_id: "a" })).text, null);
+  assert.equal(sessionRecord({ sessionId: "a", mode: "bypassPermissions" }, ctx({ session_id: "b" })).mode, null);
+  assert.equal(sessionRecord({ sessionId: "a", mode: "bypassPermissions" }, ctx({ session_id: "a" })).mode, "bypassPermissions");
+  assert.equal(foreign({ sessionId: "a", pid: 1 }, ctx({ session_id: "b" }), () => true), true);
+  assert.equal(foreign({ sessionId: "a", pid: 1 }, ctx({ session_id: "b" }), () => false), false);
+  assert.equal(foreign({ sessionId: "a", pid: 1 }, ctx({ session_id: "a" }), () => true), false);
 });
