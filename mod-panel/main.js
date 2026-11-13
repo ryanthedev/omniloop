@@ -351,7 +351,7 @@ export default class OmniloopPanel extends View {
     const title = h_flex().px(10).pt(10).gap(6).items_center()
       .child(div().flex_none().text_size(13).font_semibold().text_color(t.accent).child(ctx.cur ? `◎ ${ctx.cur}` : "No loop"))
       .when(Boolean(cur?.lead), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(`lead ${cur.lead}`)))
-      .when((cur?.needsYou ?? 0) > 0, (el) => el.child(div().flex_none().text_size(10.5).text_color(t.blocked).child(`${cur.needsYou} for you`)));
+      .when((cur?.needsYou ?? 0) > 0, (el) => el.child(div().flex_none().text_size(10.5).text_color(t.blocked).child(cur.forYou || `${cur.needsYou} for you`)));
     return v_flex().id(`pl-${this.uid}`).flex_1().min_h(0).overflow_y_scroll().pb(10)
       .child(title)
       .child(div().px(10).text_size(10.5).text_color(t.dim).child(why))
@@ -375,7 +375,7 @@ export default class OmniloopPanel extends View {
           .child(div().flex_none().w(6).h(6).rounded(3).bg(l.needsYou ? t.blocked : l.live ? t.accent : t.border ?? t.dim))
           .child(div().flex_none().text_size(12.5).font_semibold().text_color(l.id === ctx.cur ? t.accent : t.foreground).child(l.id))
           .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(t.muted).child(l.goal))
-          .when(l.needsYou > 0, (el) => el.child(div().flex_none().text_size(10.5).text_color(t.blocked).child(`${l.needsYou} for you`))))
+          .when(l.needsYou > 0, (el) => el.child(div().flex_none().text_size(10.5).text_color(t.blocked).child(l.forYou || `${l.needsYou} for you`))))
         .child(div().pl(12).truncate().text_size(10.5).text_color(t.dim).child(meta));
     };
     const list = div().flex_1().min_h(0).w_full().child(v_virtual_list(`pal-${this.uid}`, rows.length, LOOP_ROW, (i) => rows[i].text, (range) => {

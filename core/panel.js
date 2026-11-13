@@ -66,6 +66,8 @@ export function allLoops(disk = [], live = []) {
     lead: l?.lead ?? null,
     members: l?.rows?.length ?? 0,
     needsYou: l?.needsYou ?? 0,
+    // What waits on you, in words ("1 needs approval · 2 asked you"); a count where the view has no words yet.
+    forYou: l?.forYouLabel || (l?.needsYou ? `${l.needsYou} for you` : ""),
     yours: d?.tasks?.yours?.length ?? 0,
     agentTasks: (d?.tasks?.agents ?? []).reduce((n, a) => n + a.tasks.length, 0),
     lastWithYou: l?.lastWithYou ?? null,
@@ -134,7 +136,7 @@ export function loopRows(id, disk, live, open = {}) {
   head(`MEMBERS${members.length ? ` (${members.length})` : ""}`);
   if (!members.length) rows.push({ kind: "empty", text: "No live terminals in this loop." });
   for (const m of members) rows.push({ kind: "member", text: m.name, address: m.address, depth: m.depth, status: m.status,
-    isLead: m.isLead, forYou: m.forYou, ago: m.ago, terminal: m.address, pick: true });
+    isLead: m.isLead, forYou: m.forYouLabel ?? m.forYou, ago: m.ago, terminal: m.address, pick: true });
 
   const dirs = disk?.dirs ?? [], projects = disk?.projects ?? [];
   rows.push({ kind: "head", text: "CONTEXT", hint: disk ? "a add folder · p add project" : "" });

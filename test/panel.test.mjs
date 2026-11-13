@@ -222,3 +222,15 @@ test("c asks to collapse; collapseTo shrinks to a strip and opens to the last wi
   assert.deepEqual(collapseTo(456, null, 40), { px: STRIP_PX, wide: 456 });
   assert.equal(forYouTotal([{ needsYou: 2 }, { needsYou: 0 }, {}]), 2);
 });
+
+test("for-you words: the loop's label and a member's word replace counts and reasons", () => {
+  const lv = [{ ...live[0], needsYou: 3, forYouLabel: "1 needs approval · 2 asked you",
+    rows: [{ ...live[0].rows[0], forYou: "the lead", forYouLabel: "asked you" }, live[0].rows[1]] }];
+  const a = allLoops(disk, lv).find((l) => l.id === "alpha");
+  assert.equal(a.forYou, "1 needs approval · 2 asked you");
+  const m = loopRows("alpha", disk[0], lv[0]).find((r) => r.kind === "member" && r.isLead);
+  assert.equal(m.forYou, "asked you");
+  // an older view (another machine's) with counts only
+  assert.equal(allLoops([], [{ ...live[1] }])[0].forYou, "2 for you");
+  assert.equal(allLoops(disk, [])[0].forYou, "");
+});
