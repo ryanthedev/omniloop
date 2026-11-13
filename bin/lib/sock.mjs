@@ -112,9 +112,13 @@ export async function locate(target) {
  * hcSend(address, text): the fallback (the caller owns hc: --if guards, timeouts).
  * Returns { via: "socket" | "hc", to } or throws with a reason.
  */
-export async function deliver(target, { from, text, replyTo = process.env.CLAUDE_CODE_MESSAGING_SOCKET ?? null, hcSend = null } = {}) {
+export async function deliver(target, { from, text, replyTo = process.env.CLAUDE_CODE_MESSAGING_SOCKET ?? null, hcSend = null, typed = true } = {}) {
   const where = await locate(target);
-  const how = route(where);
+  // typed: false is for an agent's own words (omniloop send, the MCP tool). They are never typed into a terminal,
+  // where they would read as the user's: a bypass receiver gets the socket message and holds it for its person's
+  // approval (that gate is the point of bypass), and a session without a socket can't be sent to this way.
+  const how = typed ? route(where) : where.session?.messagingSocketPath ? { socket: where.session.messagingSocketPath } : { none: true };
+  if (!typed) hcSend = null;
   if (how.socket) {
     const token = await tokenOf(where.session.pid);
     const content = envelope({ from: replyTo ? udsAddress(replyTo) : null, name: from, mode: "prompting", text });
@@ -134,5 +138,15 @@ export async function deliver(target, { from, text, replyTo = process.env.CLAUDE
     await hcSend(how.hc ?? where.address, `${from ? `${clean(senderName(from) ?? "")}: ` : ""}${clean(text)}`);
     return { via: "hc", to: how.hc ?? where.address };
   }
+  if (!typed && where.session) throw new Error(`${target} has no messaging socket (Claude Code older than 2.1.319, or not Claude); hc send types it as if from the user`);
   throw new Error(where.error ?? `can't reach ${target}`);
+}
+
+/** This session's own omniloop address (the key of its turn record): HC_TERMINAL_ID, else its hook record's. */
+export async function myAddress() {
+  if (process.env.HC_TERMINAL_ID) return process.env.HC_TERMINAL_ID;
+  const sock = process.env.CLAUDE_CODE_MESSAGING_SOCKET;
+  if (!sock) return null;
+  const pid = (await liveSessions()).find((x) => x.messagingSocketPath === sock)?.pid;
+  return pid == null ? null : Object.values(await hookRecords()).find((h) => h.pid === pid)?.address ?? null;
 }

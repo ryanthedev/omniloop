@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 // omniloop-mcp: omniloop's messaging as MCP tools for a Claude session (stdio, newline-delimited JSON-RPC).
 // Request handling is core/mcp.js; this file wires stdin/stdout and the real tools.
-import { spawn } from "node:child_process";
 import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -9,9 +8,8 @@ import { createInterface } from "node:readline";
 import { handleLine } from "../core/mcp.js";
 import { feedEntry, feedLine, parseFeed, FEED_FILE } from "../core/feed.js";
 import { loopHome, validId } from "../core/loopdir.js";
-import { deliver, liveSessions, hookRecords, TURNS_DIR } from "./lib/sock.mjs";
+import { deliver, liveSessions, hookRecords, myAddress, TURNS_DIR } from "./lib/sock.mjs";
 
-const SEND_TIMEOUT_MS = 180_000;
 
 const needText = (v, what) => { if (typeof v !== "string" || !v.trim()) throw new Error(`${what} is required`); return v; };
 
@@ -25,14 +23,6 @@ async function sender() {
   }
   return "agent";
 }
-
-// hc send <addr> <text>, failing on a non-zero exit or a timeout.
-const hcSend = (addr, text) => new Promise((res, rej) => {
-  const p = spawn("hc", ["send", addr, text], { stdio: "ignore" });
-  const t = setTimeout(() => { p.kill(); rej(new Error(`hc send to ${addr} timed out`)); }, SEND_TIMEOUT_MS);
-  p.on("error", (e) => { clearTimeout(t); rej(e); });
-  p.on("exit", (code) => { clearTimeout(t); code === 0 ? res() : rej(new Error(`hc send to ${addr} failed (exit ${code})`)); });
-});
 
 // Tell the watcher this turn already reported to `to`, so it won't send a duplicate "finished its turn".
 async function markReported(from, to) {
@@ -76,8 +66,10 @@ const tools = [
     async run({ to, text }) {
       needText(to, "to"); needText(text, "text");
       const from = await sender();
-      const d = await deliver(to, { from, text, hcSend });
-      await markReported(from, to).catch(() => {});
+      // Never typed: an agent's words go only as a labelled message (see deliver's typed option).
+      const d = await deliver(to, { from, text, typed: false });
+      const self = await myAddress().catch(() => null);
+      if (self) await markReported(self, to).catch(() => {});
       return `sent to ${to} via ${d.via}`;
     },
   },

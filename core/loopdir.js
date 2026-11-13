@@ -50,7 +50,7 @@ const SHARED_RULES = `### Other loops may work here too
 These folders can be shared with other loops, at the same time as you. \`omniloop shared\` lists them and their leads.
 
 - **Before a change, say so:** run \`omniloop shared\`; if another loop is in that folder, tell its lead which files
-  you'll touch (\`hc send <lead> "…"\`), and answer such notes from them. Once per change, not per edit.
+  you'll touch (\`omniloop send <lead> "…"\`), and answer such notes from them. Once per change, not per edit.
 - **In a git repo, use a branch:** work on \`<loop>/<topic>\` (or a \`git worktree\`), not on the checkout others use.
   Merge only with the tests passing.
 - **Never change what others stand on without the user:** \`git init\`, reset, force-push, rewriting a shared branch,
@@ -111,7 +111,8 @@ Your Engram rules are in your global instructions; in this loop also:
 | \`omniloop add-dir <path>\` | add a context folder to the loop |
 | \`omniloop shared\` | other loops in this loop's folders, and their leads |
 | \`omniloop handoff <file>\` | at about 60% context: write \`<file>\`, run this, stop |
-| \`hc read <t>\` / \`hc send <t> "<text>"\` | see a helper's screen / answer it |
+| \`omniloop send <t> "<text>"\` | message a helper, your lead or another session; it arrives labelled as you, never as the user (MCP: \`send_message\`) |
+| \`hc read <t>\` | see a helper's screen |
 | \`engram search\` / \`engram ingest\` | the shared memory (above) |
 
 ## Decisions

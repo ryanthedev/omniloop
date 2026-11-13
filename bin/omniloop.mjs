@@ -912,11 +912,9 @@ async function cmdSend({ flags, rest }) {
   if (!to || !words.length) die('usage: omniloop send <to> "<text>"   (<to>: address, session name, pid; see omniloop sessions)');
   let from = typeof flags.from === "string" ? flags.from : me();
   if (!from && process.env.CLAUDE_CODE_MESSAGING_SOCKET) from = (await liveSessions()).find((x) => x.messagingSocketPath === process.env.CLAUDE_CODE_MESSAGING_SOCKET)?.name ?? null;
-  const hcSend = (addr, text) => run("hc", ["send", addr, text], { timeout: SEND_TIMEOUT_MS }).catch((e) => {
-    if (sendFailed(e.code, `${e.stdout ?? ""}${e.stderr ?? ""}`)) throw new Error(`hc send to ${addr} failed`);
-  });
   try {
-    const d = await deliver(to, { from: from ?? "agent", text: words.join(" "), hcSend });
+    // Never typed (see deliver's typed option): your words arrive labelled as yours, or not at all.
+    const d = await deliver(to, { from: from ?? "agent", text: words.join(" "), typed: false });
     console.log(`sent to ${d.to} (${d.via === "socket" ? "message" : "typed"})`);
   } catch (e) { die(`not sent: ${e.message ?? e}`); }
 }
