@@ -175,10 +175,10 @@ const mk = () => loopEntries(
   [{ id: "plenary", goal: "ship", rows: [] }, { id: "ska/plenary-ska", goal: "remote one", rows: [] }, { id: "vana/other", goal: "x", rows: [] }],
   [{ id: "plenary", goal: "ship" }, { id: "idle-one", goal: "nobody here" }]);
 
-test("machine: every entry has a chip name; this computer's is 'this mac' unless named", () => {
+test("machine: every entry has a chip name; this computer's is 'this computer' unless named", () => {
   const es = mk();
   assert.deepEqual(es.map((e) => [e.key, e.where]), [["plenary", LOCAL_NAME], ["ska/plenary-ska", "ska"], ["vana/other", "vana"], ["idle-one", LOCAL_NAME]]);
-  assert.equal(LOCAL_NAME, "this mac");
+  assert.equal(LOCAL_NAME, "this computer");
   assert.equal(loopEntries([{ id: "a", rows: [] }], [], [], "mymac")[0].where, "mymac");
   assert.equal(es[1].machine, "ska"); // machine itself unchanged: null here, the name there
   assert.equal(es[0].machine, null);

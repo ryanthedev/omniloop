@@ -135,7 +135,7 @@ export function leadAddress(stdout, machine = null) {
 // ---- every loop, searched (the ⌘O list) ---------------------------------------------------------------------
 
 /** What a loop on this computer shows as its machine when the computer's own name isn't known. */
-export const LOCAL_NAME = "this mac";
+export const LOCAL_NAME = "this computer";
 const HERE = ["here", "local"];
 
 const baseName = (p) => String(p ?? "").split("/").filter(Boolean).pop() ?? "";
