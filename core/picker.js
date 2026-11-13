@@ -7,6 +7,8 @@
 // debounced as you type) can replace the word match later without touching the rest.
 
 import { validId } from "./loopdir.js";
+import { fuzzyFields, tokenScore, tokens, snippet } from "./fuzzy.js";
+import { slotOf } from "./pins.js";
 
 const words = (s) => String(s ?? "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
 
@@ -74,12 +76,13 @@ export function askRows(loops, query, takenIds = loops.map((l) => l.id)) {
   return found.length ? [...found, fresh] : [fresh];
 }
 
-/** Folders for step "context": selected ones first, then matches. folders: absolute paths. */
+/** Folders for step "context": selected ones first, then fuzzy matches on the folder's name (then its path). */
 export function folderRows(folders, query, selected = []) {
   const sel = new Set(selected);
   const base = (p) => p.split("/").filter(Boolean).pop() ?? p;
-  const hits = folders.filter((p) => !sel.has(p) && matchScore(query, `${base(p)} ${p}`) > 0)
-    .sort((a, b) => matchScore(query, base(b)) - matchScore(query, base(a)) || base(a).localeCompare(base(b)));
+  const score = (p) => fuzzyFields(query, [{ name: "name", text: base(p), weight: 2 }, { name: "path", text: p }])?.score ?? -1;
+  const hits = folders.filter((p) => !sel.has(p) && score(p) >= 0)
+    .sort((a, b) => score(b) - score(a) || base(a).localeCompare(base(b)));
   return [...selected.map((p) => ({ path: p, name: base(p), on: true })), ...hits.map((p) => ({ path: p, name: base(p), on: false }))];
 }
 
@@ -89,8 +92,9 @@ export function folderRows(folders, query, selected = []) {
  */
 export function projectRows(projects, query, picked = []) {
   const sel = new Set(picked);
+  const score = (p) => fuzzyFields(query, [{ name: "name", text: p.name, weight: 2 }, { name: "description", text: p.description ?? "", long: true }])?.score ?? -1;
   const on = projects.filter((p) => sel.has(p.name)).map((p) => ({ kind: "project", name: p.name, description: p.description ?? "", on: true }));
-  const off = projects.filter((p) => !sel.has(p.name) && matchScore(query, `${p.name} ${p.description ?? ""}`) > 0)
+  const off = projects.filter((p) => !sel.has(p.name) && score(p) >= 0).sort((a, b) => score(b) - score(a))
     .map((p) => ({ kind: "project", name: p.name, description: p.description ?? "", on: false }));
   return [...on, ...off];
 }
@@ -126,4 +130,93 @@ export function leadAddress(stdout, machine = null) {
   const m = String(stdout ?? "").match(/^lead (\S+) in space /m);
   if (!m) return null;
   return machine ? `${machine}/${m[1]}` : m[1];
+}
+
+// ---- every loop, searched (the ⌘O list) ---------------------------------------------------------------------
+
+const baseName = (p) => String(p ?? "").split("/").filter(Boolean).pop() ?? "";
+
+/**
+ * One entry per loop, from the loops with sessions (buildView(...).loops, keyed by loopKey: "<id>" or "<machine>/<id>")
+ * and this computer's loop folders (`omniloop index --json`: [{ id, goal, dirs, projects, tasks, feed, touched }]),
+ * so a loop with nobody running still shows and can be searched. Entry:
+ * { key, id, machine, goal, lead, needsYou, status, ago, lastWithYou, touched, running, members, dirs, projects, tasks, feed, pin }
+ */
+export function loopEntries(viewLoops = [], index = [], pins = []) {
+  const byId = new Map(index.map((x) => [x.id, x]));
+  const out = [];
+  for (const l of viewLoops) {
+    const i = l.id.indexOf("/");
+    const machine = i < 0 ? null : l.id.slice(0, i);
+    const disk = machine ? null : byId.get(l.id);
+    out.push({ key: l.id, id: machine ? l.id.slice(i + 1) : l.id, machine, goal: l.goal ?? disk?.goal ?? "", lead: l.lead ?? l.rows?.[0]?.address ?? null,
+      needsYou: l.needsYou ?? 0, status: l.status ?? null, ago: l.ago ?? null, lastWithYou: l.lastWithYou ?? null, touched: disk?.touched ?? null,
+      running: true, members: (l.rows ?? []).map((r) => r.name).filter(Boolean), dirs: disk?.dirs ?? [], projects: disk?.projects ?? [],
+      tasks: disk?.tasks ?? [], feed: disk?.feed ?? [], pin: slotOf(pins, l.id) });
+  }
+  const seen = new Set(out.map((e) => e.key));
+  for (const x of index) {
+    if (seen.has(x.id)) continue;
+    out.push({ key: x.id, id: x.id, machine: null, goal: x.goal ?? "", lead: null, needsYou: 0, status: null, ago: null, lastWithYou: null,
+      touched: x.touched ?? null, running: false, members: [], dirs: x.dirs ?? [], projects: x.projects ?? [], tasks: x.tasks ?? [], feed: x.feed ?? [],
+      pin: slotOf(pins, x.id) });
+  }
+  return out;
+}
+
+const FIELD_LABEL = { member: "session", folder: "folder", project: "project", task: "task", chat: "chat" };
+
+/** How an entry matches a query: { score, why } or null. `why` is one short line, only when the hit isn't in the id or goal. */
+export function entryMatch(e, query) {
+  const m = fuzzyFields(query, [
+    { name: "id", text: e.id, weight: 3 }, { name: "goal", text: e.goal, weight: 2 },
+    { name: "member", text: e.members, weight: 1.2 }, { name: "folder", text: e.dirs.map(baseName), weight: 1.5 },
+    { name: "project", text: e.projects, weight: 1.5 }, { name: "task", text: e.tasks, long: true }, { name: "chat", text: e.feed, weight: 0.8, long: true },
+  ]);
+  if (!m) return null;
+  const why = FIELD_LABEL[m.field] ? `${FIELD_LABEL[m.field]}: ${snippet(m.text, query, 56)}` : null;
+  return { score: m.score, why };
+}
+
+const recency = (a, b) => (b.lastWithYou ?? -1) - (a.lastWithYou ?? -1) || (b.touched ?? -1) - (a.touched ?? -1) || a.key.localeCompare(b.key);
+const pinOrder = (a, b) => (a.pin ?? 99) - (b.pin ?? 99);
+
+/**
+ * The ⌘O rows. No query: pinned loops in slot order, then the ones you talked to most recently (then most recently
+ * changed). A query: every loop that fuzzy-matches, best first (pins, then recency, break ties), each with a short
+ * `why`. Rows: { kind: "loop", entry, why } then { kind: "new", id, goal } (first and alone when nothing matches).
+ */
+export function pickerRows(entries, query, takenIds = entries.filter((e) => !e.machine).map((e) => e.id)) {
+  const q = String(query ?? "").trim();
+  let found;
+  if (!q) found = [...entries].sort((a, b) => pinOrder(a, b) || recency(a, b)).map((entry) => ({ kind: "loop", entry, why: null }));
+  else found = entries.map((entry) => ({ entry, m: entryMatch(entry, q) })).filter((x) => x.m)
+    .sort((a, b) => b.m.score - a.m.score || pinOrder(a.entry, b.entry) || recency(a.entry, b.entry))
+    .map((x) => ({ kind: "loop", entry: x.entry, why: x.m.why }));
+  const fresh = q ? { kind: "new", id: slugify(q, takenIds), goal: q } : { kind: "new", id: null, goal: null };
+  return found.length ? [...found, fresh] : [fresh];
+}
+
+const SUGGEST_STOP = new Set([...STOP, "fix", "add", "new", "get", "use", "work", "working", "loop", "build", "would", "should", "could", "also", "just", "like", "from", "into", "when", "what", "have", "will", "some"]);
+
+/**
+ * Existing loops that might already cover a goal you're writing, best first, at most `n`. Unlike search, a goal is
+ * a sentence, so not every word must hit: a loop needs two of its meaningful words in its id, goal, folders or
+ * projects (one when the goal has only one or two). Returns entries.
+ */
+export function suggestLoops(entries, goal, n = 3) {
+  const ws = [...new Set(tokens(goal).map((w) => w.replace(/[^a-z0-9-]/g, "")).filter((w) => w.length >= 3 && !SUGGEST_STOP.has(w)))];
+  if (!ws.length) return [];
+  const need = ws.length <= 2 ? 1 : 2;
+  const scored = entries.map((e) => {
+    const hay = [e.id, e.goal, ...e.dirs.map(baseName), ...e.projects];
+    let hits = 0, score = 0;
+    for (const w of ws) {
+      const s = Math.max(0, ...hay.map((t) => tokenScore(w, t, { subsequence: false })));
+      if (s > 0) { hits++; score += s; }
+    }
+    return { e, hits, score };
+  }).filter((x) => x.hits >= need);
+  scored.sort((a, b) => b.hits - a.hits || b.score - a.score || recency(a.e, b.e));
+  return scored.slice(0, n).map((x) => x.e);
 }

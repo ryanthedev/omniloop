@@ -4,7 +4,8 @@
 
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, readFile, writeFile, readdir, rm, rename, open } from "node:fs/promises";
+import { mkdir, readFile, writeFile, readdir, rm, rename, open, stat, mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { createInterface } from "node:readline";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
@@ -15,6 +16,7 @@ import { validId, loopHome, newManifest, addDir, dirsOn, claudeMd, updateClaudeM
 import { matchProjects, addProject, projectLaunch, withProjectsBlock } from "../core/projects.js";
 import { goalsOf, openGoals, setGoal, addGoal, finishGoal, withGoalBlock, goalNote } from "../core/goals.js";
 import { feedEntry, feedLine, parseFeed, replyPlan, FEED_FILE } from "../core/feed.js";
+import { proposeArgs, checkProposal, fallbackProposal } from "../core/intake.js";
 import { YOU, addTask, finishTask, giveTask, openTasks, taskLines, taskNote, tasksOf } from "../core/tasks.js";
 
 const run = promisify(execFile);
@@ -787,6 +789,46 @@ async function cmdWatch({ flags }) {
   process.on("SIGINT", stop); process.on("SIGTERM", stop);
 }
 
+// ---- the picker's search data and name proposals ---------------------------------------------
+
+const INDEX_FEED = 30, INDEX_TEXT = 200;
+const clip = (t) => String(t ?? "").replace(/\s+/g, " ").trim().slice(0, INDEX_TEXT);
+
+/** Every loop folder on this computer, as what the ⌘O picker searches: id, goal, folders, projects, open tasks, the
+ *  chat's last 30 lines (each clipped) and when it last changed. Only this computer's: nothing here goes elsewhere. */
+async function cmdIndex() {
+  const out = [];
+  for (const m of await allManifests()) {
+    if (!validId(m.id)) continue;
+    const home = loopHome(homedir(), m.id);
+    const tf = (await readJson(join(home, "tasks.json"))) ?? {};
+    const { yours, agents } = openTasks(tf);
+    const tasks = [...yours, ...agents.flatMap((a) => a.tasks)].map((t) => clip(t.text));
+    const feed = (await readFeedTail(m.id, INDEX_FEED).catch(() => [])).map((e) => clip(e.text));
+    const mt = async (f) => (await stat(join(home, f)).catch(() => null))?.mtimeMs ?? 0;
+    const touched = Math.max(await mt("loop.json"), await mt("tasks.json"), await mt(FEED_FILE));
+    out.push({ id: m.id, goal: openGoals(m)[0]?.text ?? m.goal ?? "", dirs: (m.dirs ?? []).map((d) => d.path), projects: m.projects ?? [], tasks, feed, touched });
+  }
+  process.stdout.write(JSON.stringify(out) + "\n");
+}
+
+/** omniloop propose "<request>" [--taken a,b]: a model's { id, goal, source } for a new loop, as JSON. The model sees
+ *  only the request, run from an empty folder; on any failure the answer is slugify + the request (source "typed"). */
+async function cmdPropose({ flags, rest }) {
+  const request = rest.join(" ").trim();
+  if (!request) die('usage: omniloop propose "<what you want to do>" [--taken id,id]');
+  const taken = typeof flags.taken === "string" ? flags.taken.split(",").map((x) => x.trim()).filter(Boolean) : [];
+  let answer = fallbackProposal(request, taken);
+  const cwd = await mkdtemp(join(tmpdir(), "omniloop-name-"));
+  try {
+    const { stdout } = await run(SHELL, ["-lc", 'exec claude "$@"', "omniloop", ...proposeArgs(request)], { cwd, timeout: 30_000, maxBuffer: 1 << 20 });
+    answer = checkProposal(JSON.parse(stdout), request, taken);
+  } catch (e) {
+    console.error(`omniloop: no model proposal (${String(e.message ?? e).split("\n")[0].slice(0, 120)}); using the request as typed`);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+  process.stdout.write(JSON.stringify(answer) + "\n");
+}
+
 // ---- main -----------------------------------------------------------------------------------
 
 const [cmd, ...argvRaw] = process.argv.slice(2);
@@ -794,10 +836,10 @@ const argv = argvRaw;
 const parsed = parseArgs(argv);
 const table = {
   ls: cmdLs, new: cmdNew, goal: cmdGoal, task: cmdTask, say: cmdSay, feed: cmdFeed, reply: cmdReply, "add-dir": cmdAddDir, project: cmdProject, start: cmdStart, join: cmdJoin, leave: cmdLeave, "needs-you": cmdNeedsYou, shared: cmdShared,
-  timer: cmdTimer, handoff: cmdHandoff, watch: cmdWatch, brief: async () => console.log(BRIEF),
+  timer: cmdTimer, handoff: cmdHandoff, watch: cmdWatch, index: cmdIndex, propose: cmdPropose, brief: async () => console.log(BRIEF),
 };
 if (!table[cmd]) {
-  console.log("omniloop new | goal | task | say | feed | reply | add-dir | shared | project | ls | start | join | leave | needs-you | timer | handoff | watch [--loop id] [--dry-run] | brief");
+  console.log("omniloop new | propose | index | goal | task | say | feed | reply | add-dir | shared | project | ls | start | join | leave | needs-you | timer | handoff | watch [--loop id] [--dry-run] | brief");
   process.exit(cmd ? 1 : 0);
 }
 await table[cmd](parsed).catch((e) => die(e.stderr?.toString().trim() || e.message));
