@@ -13,7 +13,7 @@
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
-import { terminals, focused, theme, run, exec, home, readTextFile, props, layout, nextCommand, shared, settings } from "herdr";
+import { terminals, focused, theme, run, exec, home, readTextFile, props, layout, nextCommand, shared } from "herdr";
 import { buildView } from "./core/view.js";
 import { onMachine, loopOfTerminal, splitLoop, allLoops, currentLoop, loopRows, allRows, chooserRows, cursorRow, step, keyName, initialState } from "./core/panel.js";
 import { shq } from "./core/loopdir.js";
@@ -379,7 +379,6 @@ export default class OmniloopPanel extends View {
 
   render(_cx) {
     const t = theme();
-    const font = settings().font || settings().font_family;
     const typing = this.handle.is_focused();
     const ctx = this.context(true);
     const bar = h_flex().px(8).h(32).flex_none().gap(4).items_center().border_b(1).border_color(t.border ?? t.input)
@@ -402,7 +401,9 @@ export default class OmniloopPanel extends View {
     const root = v_flex().id(`omniloop-panel-${this.uid}`).relative().size_full().bg(t.surface ?? t.background).text_color(t.foreground)
       .track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx));
-    return (font ? root.font_family(String(font)) : root)
+    // Herdr's own UI font, not the terminal's: a monospace font spaces out punctuation ("CLAUDE .md") and makes
+    // dense rows hard to read. The picker and the other omniloop mods draw in the UI font too.
+    return root
       .child(bar)
       .child(this.s.adding ? this.chooserView(t, ctx) : this.s.view === "all" ? this.allView(t, ctx, typing) : this.loopView(t, ctx, typing))
       .child(foot)
