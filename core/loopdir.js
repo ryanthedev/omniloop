@@ -29,6 +29,50 @@ export function addDir(manifest, path, machine = null) {
   return { ...manifest, dirs: [...manifest.dirs, { path, machine }] };
 }
 
+/**
+ * The folders to start a member on `machine` with (--add-dir): a folder's own worktree when the loop has one, else
+ * the folder. `path` stays the folder's identity everywhere else (sharing, the panel, search).
+ */
+export function launchDirsOn(manifest, machine = null) {
+  return manifest.dirs.filter((d) => (d.machine ?? null) === (machine ?? null)).map((d) => d.worktree ?? d.path);
+}
+
+// ---- a worktree per loop, for a repo another loop already uses (user's rule, 2026-11-13) ----
+
+/** Folders that are live configuration: edits must land in place, so they never get a worktree. */
+export const LIVE_DIRS = [".config", ".claude"];
+
+/**
+ * Should this loop get its own worktree of `path`? Pure; the CLI gathers the facts.
+ * facts: { home, top (the repo's top folder, or null when not git), commits (count), others (ids of other loops
+ * using this folder, a folder inside it, or one holding it) }. Returns { worktree: bool, why }.
+ */
+export function worktreeChoice(path, { home, top, commits, others = [] }) {
+  if (LIVE_DIRS.some((d) => path === `${home}/${d}` || path.startsWith(`${home}/${d}/`))) return { worktree: false, why: "live config, edited in place" };
+  if (!top) return { worktree: false, why: "not a git repo" };
+  if (top !== path) return { worktree: false, why: `inside the repo ${top}` };
+  if (!commits) return { worktree: false, why: "the repo has no commits yet" };
+  if (!others.length) return { worktree: false, why: "no other loop uses it" };
+  return { worktree: true, why: `also used by ${others.join(", ")}` };
+}
+
+/** Where a loop's worktree of `path` goes: <loop home>/wt/<folder name>, with -2, -3… when that name is taken. */
+export function worktreeTarget(loopHomePath, path, taken = []) {
+  const name = path.split("/").filter(Boolean).pop() ?? "repo";
+  const used = new Set(taken);
+  let out = `${loopHomePath}/wt/${name}`, n = 2;
+  while (used.has(out)) out = `${loopHomePath}/wt/${name}-${n++}`;
+  return out;
+}
+
+/** The loop's branch in a worktree. */
+export const worktreeBranch = (id) => `${id}/work`;
+
+/** Record a worktree on a folder entry. Returns a new manifest. */
+export function setWorktree(manifest, path, { worktree, branch, base, dirty = 0 }) {
+  return { ...manifest, dirs: manifest.dirs.map((d) => (d.path === path && !d.machine ? { ...d, worktree, branch, base, dirty } : d)) };
+}
+
 /** The folders a member on `machine` (null = this computer) can be given with --add-dir. */
 export function dirsOn(manifest, machine = null) {
   return manifest.dirs.filter((d) => (d.machine ?? null) === (machine ?? null)).map((d) => d.path);
@@ -39,7 +83,9 @@ const CONTEXT_END = "<!-- /omniloop:context -->";
 
 function contextBlock(manifest) {
   const dirs = manifest.dirs.length
-    ? manifest.dirs.map((d) => `- \`${d.path}\`${d.machine ? ` (on ${d.machine})` : ""}`).join("\n")
+    ? manifest.dirs.map((d) => d.worktree
+      ? `- \`${d.path}\`: **your own copy is \`${d.worktree}\`** (git worktree, branch \`${d.branch}\`, from ${d.base}). Work there, not\n  in \`${d.path}\`, which other loops use.${d.dirty ? ` It started from the last commit: ${d.dirty} uncommitted file(s) in\n  the shared checkout are not in your copy.` : ""} To land: tests pass in your copy, then \`git -C ${d.path} status\`\n  must be clean before \`git -C ${d.path} merge --ff-only ${d.branch}\` (rebase on its branch first if it moved).`
+      : `- \`${d.path}\`${d.machine ? ` (on ${d.machine})` : ""}`).join("\n")
     : "- (none yet: `omniloop add-dir <path>`)";
   return `${CONTEXT_START}\n## Context\n\nThe folders this loop works in (each was given to you with --add-dir). Work in them by absolute\npath, e.g. \`git -C <folder> status\`; this loop folder is for the loop's own notes.\n\n${dirs}\n\n${SHARED_RULES}\n${CONTEXT_END}`;
 }
@@ -51,13 +97,14 @@ These folders can be shared with other loops, at the same time as you. \`omniloo
 
 - **Before a change, say so:** run \`omniloop shared\`; if another loop is in that folder, tell its lead which files
   you'll touch (\`omniloop send <lead> "…"\`), and answer such notes from them. Once per change, not per edit.
-- **In a git repo, use a branch:** work on \`<loop>/<topic>\` (or a \`git worktree\`), not on the checkout others use.
-  Merge only with the tests passing.
+- **In a git repo, use your own copy:** when a folder above names your own copy (a git worktree), work there and
+  land it as it says. Otherwise work on a \`<loop>/<topic>\` branch (or a \`git worktree\`), not on the checkout
+  others use. Merge only with the tests passing.
 - **Never change what others stand on without the user:** \`git init\`, reset, force-push, rewriting a shared branch,
   or moving or deleting files you didn't make.`;
 
 /** Is one path the other, or inside it (by whole folder names, so /a/b-c is not inside /a/b)? */
-function overlaps(a, b) {
+export function overlaps(a, b) {
   const x = a.replace(/\/+$/, ""), y = b.replace(/\/+$/, "");
   return x === y || x.startsWith(y + "/") || y.startsWith(x + "/");
 }

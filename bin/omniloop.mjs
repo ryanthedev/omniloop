@@ -4,7 +4,7 @@
 
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, readFile, writeFile, readdir, rm, rename, open, stat, mkdtemp } from "node:fs/promises";
+import { mkdir, readFile, writeFile, readdir, rm, rename, open, stat, mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createInterface } from "node:readline";
 import { homedir } from "node:os";
@@ -12,7 +12,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LABEL, buildLoops, statusOf } from "../core/omniloop.js";
 import { initState, step, parseDuration, touchedByYou, sendFailed, hold, withoutReplies } from "../core/watch.js";
-import { validId, loopHome, newManifest, addDir, dirsOn, claudeMd, updateClaudeMd, memberArgv, parseAliasWords, sharedWith, LOOPS_DIR } from "../core/loopdir.js";
+import { validId, loopHome, newManifest, addDir, dirsOn, launchDirsOn, worktreeChoice, worktreeTarget, worktreeBranch, setWorktree, overlaps, claudeMd, updateClaudeMd, memberArgv, parseAliasWords, sharedWith, LOOPS_DIR } from "../core/loopdir.js";
 import { matchProjects, addProject, projectLaunch, withProjectsBlock } from "../core/projects.js";
 import { goalsOf, openGoals, setGoal, addGoal, finishGoal, withGoalBlock, goalNote } from "../core/goals.js";
 import { feedEntry, feedLine, parseFeed, replyPlan, FEED_FILE } from "../core/feed.js";
@@ -94,7 +94,7 @@ async function launchOf(manifest) {
   if (!manifest) return { dirs: [], pluginDirs: [] };
   const { pluginDirs, dirs, missing } = projectLaunch(manifest, await loadProjects());
   if (missing.length) console.error(`omniloop: loop ${manifest.id} lists missing project(s): ${missing.join(", ")}`);
-  const all = dirsOn(manifest);
+  const all = launchDirsOn(manifest);
   for (const d of dirs) if (!all.includes(d)) all.push(d);
   return { dirs: all, pluginDirs: [PLUGIN, ...pluginDirs] };
 }
@@ -290,6 +290,48 @@ async function cmdHandoff({ flags, rest }) {
   console.log(`${r.address} continues as ${old}; ${kids.length} report(s) and ${moved} task(s) moved. You can stop now.`);
 }
 
+// ---- a worktree per loop, for a repo another loop already uses ----------------------------------
+
+async function git(dir, args) { return (await run("git", ["-C", dir, ...args], { timeout: 30_000 })).stdout.trim(); }
+const exists = async (p) => Boolean(await stat(p).catch(() => null));
+
+/**
+ * Give the loop its own git worktree of each folder on this computer that another loop already uses (core/loopdir.js
+ * worktreeChoice: whole repos with commits, never live config). `only`: just that folder. Fails soft: on any git
+ * error the folder stays shared and the line says why. Never stashes, commits or inits anything.
+ * Returns { manifest, lines } (one line per folder, for the command's output).
+ */
+async function isolateDirs(id, manifest, { dry = false, only = null } = {}) {
+  const home = loopHome(homedir(), id);
+  const others = (await allManifests()).filter((o) => o.id !== id);
+  let m = manifest;
+  const lines = [];
+  for (const d of manifest.dirs) {
+    if (d.machine || d.worktree || (only && d.path !== only)) continue;
+    let top = null, commits = 0, real = d.path;
+    try { real = await realpath(d.path); top = await git(d.path, ["rev-parse", "--show-toplevel"]); commits = Number(await git(d.path, ["rev-list", "--count", "HEAD"])) || 0; } catch {}
+    const using = others.filter((o) => dirsOn(o).some((p) => overlaps(p, d.path))).map((o) => o.id);
+    const choice = worktreeChoice(real, { home: homedir(), top, commits, others: using });
+    if (!choice.worktree) { lines.push(`  ${d.path}: shared (${choice.why})`); continue; }
+    if (dry) { lines.push(`  ${d.path}: would get its own worktree (${choice.why})`); continue; }
+    try {
+      const taken = m.dirs.map((x) => x.worktree).filter(Boolean);
+      let target = worktreeTarget(home, d.path, taken);
+      while (await exists(target)) target = worktreeTarget(home, d.path, [...taken, target]);
+      const branch = worktreeBranch(id);
+      const has = await git(d.path, ["branch", "--list", branch]);
+      await git(d.path, ["worktree", "add", target, ...(has ? [branch] : ["-b", branch])]);
+      const base = await git(target, ["rev-parse", "--short", "HEAD"]);
+      const dirty = (await git(d.path, ["status", "--porcelain"])).split("\n").filter(Boolean).length;
+      m = setWorktree(m, d.path, { worktree: target, branch, base, dirty });
+      lines.push(`  ${d.path}: own copy ${target} on ${branch} (${choice.why})${dirty ? `; ${dirty} uncommitted file(s) there are not in it` : ""}`);
+    } catch (e) {
+      lines.push(`  ${d.path}: shared (no worktree: ${String(e.stderr || e.message || e).trim().split("\n")[0].slice(0, 140)})`);
+    }
+  }
+  return { manifest: m, lines };
+}
+
 async function cmdNew({ flags, rest }) {
   const id = rest[0];
   if (!validId(id)) die("usage: omniloop new <id> [--goal G] [--dir D]... [--project P]... [--task T] [--no-lead]   (id: a-z 0-9 - _)");
@@ -308,13 +350,16 @@ async function cmdNew({ flags, rest }) {
     }
   }
   const dry = Boolean(flags["dry-run"]);
+  if (!dry) await mkdir(home, { recursive: true });
+  const iso = await isolateDirs(id, manifest, { dry });
+  manifest = iso.manifest;
   if (!dry) {
-    await mkdir(home, { recursive: true });
     await writeJson(join(home, "loop.json"), manifest);
     await writeClaudeMd(home, manifest);
   }
   const np = manifest.projects?.length ?? 0;
   console.log(`loop ${id}: ${home} (${dirs.length} context folder${dirs.length === 1 ? "" : "s"}${np ? `; project${np === 1 ? "" : "s"} ${manifest.projects.join(", ")}` : ""})${dry ? " [dry run: nothing written]" : ""}`);
+  for (const l of iso.lines) console.log(l);
   if (flags["no-lead"]) return;
 
   // A space named after the loop, started in its folder, with the lead as its first tab.
@@ -397,11 +442,14 @@ async function cmdAddDir({ flags, rest }) {
   const m = await manifestOf(id);
   if (!m) die(`loop ${id} has no folder (${home}); make one with omniloop new`);
   const on = typeof flags.on === "string" ? flags.on : null;
-  const next = addDir(m, path, on);
+  let next = addDir(m, path, on);
   if (next === m) return console.log(`${path} is already in ${id}`);
+  let lines = [];
+  if (!on) ({ manifest: next, lines } = await isolateDirs(id, next, { only: path }));
   await writeJson(join(home, "loop.json"), next);
   await writeClaudeMd(home, next, await readFile(join(home, "CLAUDE.md"), "utf8").catch(() => null));
   console.log(`added ${path}${on ? ` (on ${on})` : ""} to ${id}: members started from now get it. Running ones see it in CLAUDE.md; reading it may ask for approval until they hand off.`);
+  for (const l of lines) console.log(l);
 }
 
 async function allManifests() {
