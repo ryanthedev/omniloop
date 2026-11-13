@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { onMachine, loopOfTerminal, splitLoop, allLoops, currentLoop, loopRows, allRows, step, cursorRow, keyName, initialState } from "../core/panel.js";
+import { placeOf, onMachine, loopOfTerminal, splitLoop, allLoops, currentLoop, loopRows, allRows, step, cursorRow, keyName, initialState } from "../core/panel.js";
 
 const disk = [
   { id: "alpha", goals: [{ n: 1, text: "Ship alpha" }, { n: 2, text: "Docs" }], dirs: [{ path: "/r/alpha", machine: null }], projects: ["study"],
@@ -185,4 +185,17 @@ test("chooserRows: filters, marks what the loop has, offers a typed path", () =>
   assert.ok(rows[0].have && !rows[0].pick); assert.ok(rows[1].pick);
   assert.equal(chooserRows({ kind: "dir", q: "~/new" }, cands)[0].value, "~/new");
   assert.equal(chooserRows({ kind: "project", q: "zzz" }, cands).at(-1).kind, "empty");
+});
+
+test("placeOf puts a folder's own name first and shortens any home to ~", () => {
+  assert.deepEqual(placeOf("/Users/jane.doe@example.com/repos/claude-stuff"), { name: "claude-stuff", where: "~/repos" });
+  assert.deepEqual(placeOf("/home/r/loops/proj/"), { name: "proj", where: "~/loops" });
+  assert.deepEqual(placeOf("/Users/r"), { name: "~", where: "" });
+  assert.deepEqual(placeOf("/opt/x"), { name: "x", where: "/opt" });
+  assert.deepEqual(placeOf("/x"), { name: "x", where: "/" });
+  const rows = loopRows("alpha", { ...disk[0], notes: { checked: true, claude: "/l/CLAUDE.md", skills: [], agentDefs: [] } }, null);
+  const head = rows.find((r) => r.text === "CONTEXT");
+  assert.equal(head.hint, "a folder · p project");
+  assert.equal(rows.find((r) => r.kind === "dir").name, "alpha");
+  assert.equal(rows.find((r) => r.kind === "notes").name, "Loop notes");
 });

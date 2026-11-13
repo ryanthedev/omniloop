@@ -262,7 +262,9 @@ export default class OmniloopPanel extends View {
     const band = selected ? (typing ? t.accent + "33" : t.hover) : null;
     const base = (el) => el.px(10).when(Boolean(band), (x) => x.bg(band)).when(selected && typing, (x) => x.border_l(2).border_color(t.accent));
     switch (r.kind) {
-      case "head": return div().px(10).pt(12).pb(3).text_size(10.5).font_semibold().text_color(t.dim).child(r.text);
+      case "head": return h_flex().px(10).pt(14).pb(4).gap(8).items_center()
+        .child(div().flex_1().min_w(0).text_size(10.5).font_semibold().text_color(t.dim).child(r.text))
+        .when(Boolean(r.hint), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(r.hint)));
       case "empty": return div().px(10).py(3).text_size(12).text_color(t.dim).child(r.text);
       case "goal": return base(div().py(3)).text_size(r.current ? 15 : 12.5).font_semibold().text_color(r.current ? t.foreground : t.muted).child(r.text);
       case "todo": return base(h_flex().id(`pr-${i}-${this.uid}`).py(3).gap(8).items_start().cursor_pointer())
@@ -282,17 +284,21 @@ export default class OmniloopPanel extends View {
         .when(Boolean(r.forYou), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.blocked).child(r.forYou)))
         .when(!r.forYou && Boolean(r.ago), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(r.ago)));
       case "dir": case "project": case "notes": {
-        const name = r.kind === "dir" ? (r.machine ? `${r.machine}:${r.text}` : r.text.replace(home(), "~")) : r.kind === "project" ? `project: ${r.text}` : r.text;
+        // Line 1: its name, big, so you can find it. Line 2: where it is (dim), and what instructions it carries.
+        const where = r.kind === "dir" && r.machine ? `on ${r.machine} · ${r.where}` : r.where;
         const insColor = r.ins.state === "has" ? t.accent : t.dim;
-        return base(v_flex().id(`pr-${i}-${this.uid}`).py(3).gap(1).cursor_pointer())
+        const icon = r.kind === "project" ? "◆" : r.kind === "notes" ? "✎" : "▣";
+        return base(v_flex().id(`pr-${i}-${this.uid}`).py(5).gap(2).cursor_pointer())
           .on_click((_e, cx) => { this.s = { ...this.s, open: { ...this.s.open, [r.key]: !this.s.open[r.key] } }; cx.notify(); })
           .child(h_flex().gap(6).items_center()
             .child(div().flex_none().w(10).text_size(11).text_color(t.dim).child(this.s.open[r.key] ? "▾" : "▸"))
-            .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.foreground).child(name)))
-          .when(Boolean(r.description), (el) => el.child(div().pl(16).truncate().text_size(11).text_color(t.muted).child(r.description)))
-          .child(div().pl(16).truncate().text_size(11).text_color(insColor).child(r.ins.text));
+            .child(div().flex_none().text_size(11).text_color(r.kind === "project" ? t.accent : t.dim).child(icon))
+            .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(t.foreground).child(r.name ?? r.text)))
+          .child(h_flex().pl(32).gap(8).items_center()
+            .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(where ?? ""))
+            .child(div().flex_none().text_size(11).text_color(insColor).child(r.ins.text)));
       }
-      case "file": return base(h_flex().id(`pr-${i}-${this.uid}`).py(1).pl(26).gap(6).items_center().when(Boolean(r.path), (x) => x.cursor_pointer()))
+      case "file": return base(h_flex().id(`pr-${i}-${this.uid}`).py(1).pl(42).gap(6).items_center().when(Boolean(r.path), (x) => x.cursor_pointer()))
         .when(Boolean(r.path) && r.local, (el) => el.on_click(() => this.act({ type: "open-file", path: r.path }, this.context(), null)))
         .child(div().flex_none().text_size(11).text_color(t.dim).child(r.path ? "·" : ""))
         .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(r.path ? t.muted : t.dim).child(r.text));
