@@ -137,7 +137,7 @@ export function loopRows(id, disk, live, open = {}) {
     isLead: m.isLead, forYou: m.forYou, ago: m.ago, terminal: m.address, pick: true });
 
   const dirs = disk?.dirs ?? [], projects = disk?.projects ?? [];
-  rows.push({ kind: "head", text: "CONTEXT", hint: disk ? "a folder · p project" : "" });
+  rows.push({ kind: "head", text: "CONTEXT", hint: disk ? "a add folder · p add project" : "" });
   if (!dirs.length && !projects.length) rows.push({ kind: "empty", text: disk ? "No folders or projects." : "Its folder couldn't be read (machine offline?)." });
   // Each folder and project says what instructions it carries; Enter unfolds the files (Enter on a file opens it).
   const local = !disk?.machine;

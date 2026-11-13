@@ -195,7 +195,7 @@ test("placeOf puts a folder's own name first and shortens any home to ~", () => 
   assert.deepEqual(placeOf("/x"), { name: "x", where: "/" });
   const rows = loopRows("alpha", { ...disk[0], notes: { checked: true, claude: "/l/CLAUDE.md", skills: [], agentDefs: [] } }, null);
   const head = rows.find((r) => r.text === "CONTEXT");
-  assert.equal(head.hint, "a folder · p project");
+  assert.equal(head.hint, "a add folder · p add project");
   assert.equal(rows.find((r) => r.kind === "dir").name, "alpha");
   assert.equal(rows.find((r) => r.kind === "notes").name, "Loop notes");
 });
