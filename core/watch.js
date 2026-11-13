@@ -242,12 +242,20 @@ export const ADOPT_AFTER_MS = 3 * 1000;
 /** A new console not adoptable by then (no space label, a space with no loop) is dropped from the candidates. */
 export const ADOPT_WITHIN_MS = 60 * 1000;
 
+/** The Herdr space and tab a terminal sits in, from its `where` label ("<space> / <tab>"), or nulls. */
+export function whereOf(t) {
+  const w = t?.labels?.where ?? "";
+  const i = w.lastIndexOf(" / ");
+  return i < 0 ? { space: null, tab: null } : { space: w.slice(0, i), tab: w.slice(i + 3) };
+}
+
 /**
- * A console made in a loop's space (Herdr's + menu: `tab.new`, which sets no omniloop labels) joins that loop,
+ * A console made in a loop's own space (Herdr's + menu: `tab.new`, which sets no omniloop labels) joins that loop,
  * reporting to its lead. Only new consoles (`candidates`: address -> when the watcher saw it created), so what was
- * already open is never swept in, and `omniloop leave` sticks. A space is a loop's when every live, labelled member
- * on this machine in it belongs to that one loop. Returns { adopt: [{ address, loop, to }], keep: candidates still
- * waiting }. `to` is null when the loop has no lead (you lead it).
+ * already open is never swept in, and `omniloop leave` sticks. A loop's own space is the one named after it, and
+ * every live, labelled member on this machine in it must belong to that loop. Returns { adopt: [{ address, loop,
+ * to, job }], keep: candidates still waiting }. `to` is null when the loop has no lead (you lead it); `job` is the
+ * tab's name unless Herdr only numbered it.
  */
 export function adoptions(candidates, terminals, now) {
   const ts = terminals ?? [];
@@ -259,13 +267,15 @@ export function adoptions(candidates, terminals, now) {
     const t = ts.find((x) => x.address === address);
     if (!live(t) || !local(t) || t.labels?.[LABEL.loop] || t.labels?.[LABEL.retired] || t.parent || t.name === "omniloop-watch") continue;
     if (now - seen > ADOPT_WITHIN_MS) continue;
-    const space = t.labels?.["herdr.space"];
-    if (!space || now - seen < ADOPT_AFTER_MS) { keep[address] = seen; continue; }
+    const space = t.labels?.["herdr.space"], where = whereOf(t);
+    if (!space || !where.space || now - seen < ADOPT_AFTER_MS) { keep[address] = seen; continue; }
     const loops = new Set(ts.filter((x) => x !== t && live(x) && local(x) && !x.labels?.[LABEL.retired] && x.labels?.["herdr.space"] === space && x.labels?.[LABEL.loop])
       .map((x) => x.labels[LABEL.loop]));
     if (loops.size !== 1) { if (!loops.size) keep[address] = seen; continue; }
     const loop = [...loops][0];
-    adopt.push({ address, loop, to: built.loops.find((l) => l.id === loop)?.lead ?? null });
+    if (loop !== where.space) continue;
+    const job = where.tab && !/^\d+$/.test(where.tab) ? where.tab : null;
+    adopt.push({ address, loop, to: built.loops.find((l) => l.id === loop)?.lead ?? null, job });
   }
   return { adopt, keep };
 }

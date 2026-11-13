@@ -102,11 +102,14 @@ blocked builder plus a timer; zero tokens while nothing happened.
 Herdr's **+** menu (`tab.new`) makes a terminal with no omniloop labels. Left that way, the panel jumped to an
 unrelated loop ("top of the list") and the loop tab bar dropped it. So the watcher adopts it: a terminal it sees
 **created** (never one already open), live, on this machine, unlabelled, not a `parent` helper and not named
-`omniloop-watch`, gets `omniloop=<id>` and `omniloop.to=<lead>` (no `to` when you lead) when every live, labelled,
-unretired member in its `herdr.space` belongs to one loop. It waits 3 s first (`ADOPT_AFTER_MS`), so a terminal its
-maker labels right after making it (`omniloop new` starting a lead with `tab.new`) is left alone, and gives up after
-60 s. Two loops in one space, or none: left alone. `omniloop leave --terminal <t>` undoes it and sticks. Only the
-all-loops watcher adopts (not `--loop` or `--dry-run`). Rule: `core/watch.js` `adoptions`.
+`omniloop-watch`, gets `omniloop=<id>`, `omniloop.to=<lead>` (no `to` when you lead) and `omniloop.job=<tab name>`
+(none when Herdr only numbered the tab) when it sits in the loop's **own** space (the one named after it, read from
+the `where` label) and every live, labelled, unretired member in that space belongs to the loop. A space the loop's
+members merely sit in (plenary-m2's members in the `plenary` space) adopts nothing. It waits 3 s
+(`ADOPT_AFTER_MS`; the watcher ticks again then), so a terminal its maker labels right after making it (`omniloop new`
+starting a lead with `tab.new`) is left alone, and gives up after 60 s. `omniloop leave --terminal <t>` undoes it and
+sticks. Only the all-loops watcher adopts (not `--loop` or `--dry-run`). Once adopted it is a member like any other:
+the lead hears when its turns finish, `omniloop rm` stops it, and a temporary loop doesn't end while it's open. Rule: `core/watch.js` `adoptions`.
 
 ## When you last interacted
 

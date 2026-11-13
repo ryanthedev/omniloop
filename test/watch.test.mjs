@@ -432,7 +432,8 @@ test("a typed note never carries an agent's relayed reply", () => {
 
 // ---- adoptions: a console made in a loop's space joins that loop -------------------------------
 
-const SP = (space, labels = {}) => ({ "herdr.space": space, ...labels });
+const NAMES = { spA: "m2", spB: "other", spC: "loose" };
+const SP = (space, labels = {}, tab = "3") => ({ "herdr.space": space, where: `${NAMES[space]} / ${tab}`, ...labels });
 const room = () => [
   T("t1", "done", SP("spA", L({ "omniloop.lead": "1" }))),
   T("t2", "working", SP("spA", L({ "omniloop.to": "t1" }))),
@@ -440,10 +441,12 @@ const room = () => [
 ];
 
 test("adopt: a new console in a loop's space joins it, reporting to the lead", () => {
-  const ts = [...room(), T("t5", null, SP("spA"))];
+  const ts = [...room(), T("t5", null, SP("spA", {}, "agy"))];
   const r = adoptions({ t5: 0 }, ts, ADOPT_AFTER_MS);
-  assert.deepEqual(r.adopt, [{ address: "t5", loop: "m2", to: "t1" }]);
+  assert.deepEqual(r.adopt, [{ address: "t5", loop: "m2", to: "t1", job: "agy" }]);
   assert.deepEqual(r.keep, {});
+  // A tab Herdr only numbered gives no job (the view falls back to the terminal's title).
+  assert.equal(adoptions({ t5: 0 }, [...room(), T("t5", null, SP("spA"))], ADOPT_AFTER_MS).adopt[0].job, null);
 });
 
 test("adopt: waits a moment, so a terminal its maker labels right away is left alone", () => {
@@ -451,6 +454,12 @@ test("adopt: waits a moment, so a terminal its maker labels right away is left a
   assert.deepEqual(adoptions({ t5: 0 }, ts, ADOPT_AFTER_MS - 1), { adopt: [], keep: { t5: 0 } });
   const labelled = [...room(), T("t5", null, SP("spA", L({ "omniloop.lead": "1" })))];
   assert.deepEqual(adoptions({ t5: 0 }, labelled, ADOPT_AFTER_MS), { adopt: [], keep: {} });
+});
+
+test("adopt: only the loop's own space (named after it), not a space its members merely sit in", () => {
+  const borrowed = [T("t1", "done", { "herdr.space": "spP", where: "plenary / 1", omniloop: "m2", "omniloop.lead": "1" }),
+    T("t5", null, { "herdr.space": "spP", where: "plenary / 5" })];
+  assert.deepEqual(adoptions({ t5: 0 }, borrowed, ADOPT_AFTER_MS), { adopt: [], keep: {} });
 });
 
 test("adopt: a space label that arrives late still counts; a console that never gets one is dropped", () => {
@@ -474,7 +483,7 @@ test("adopt: no loop, two loops, another machine, a helper or a finished console
 
 test("adopt: a loop with no lead (you lead it) adopts with no parent; retired members don't claim a space", () => {
   const nolead = [T("t2", "done", SP("spA", L())), T("t5", null, SP("spA"))];
-  assert.deepEqual(adoptions({ t5: 0 }, nolead, ADOPT_AFTER_MS).adopt, [{ address: "t5", loop: "m2", to: null }]);
+  assert.deepEqual(adoptions({ t5: 0 }, nolead, ADOPT_AFTER_MS).adopt, [{ address: "t5", loop: "m2", to: null, job: null }]);
   const retired = [T("t2", "done", SP("spA", L({ "omniloop.retired": "t3" }))), T("t5", null, SP("spA"))];
   assert.deepEqual(adoptions({ t5: 0 }, retired, ADOPT_AFTER_MS).adopt, []);
 });
