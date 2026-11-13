@@ -16,7 +16,8 @@ import { validId, loopHome, newManifest, addDir, dirsOn, claudeMd, updateClaudeM
 import { matchProjects, addProject, projectLaunch, withProjectsBlock } from "../core/projects.js";
 import { goalsOf, openGoals, setGoal, addGoal, finishGoal, withGoalBlock, goalNote } from "../core/goals.js";
 import { feedEntry, feedLine, parseFeed, replyPlan, FEED_FILE } from "../core/feed.js";
-import { proposeArgs, checkProposal, fallbackProposal } from "../core/intake.js";
+import { proposeArgs, checkProposal, fallbackProposal, identityTerms } from "../core/intake.js";
+import { userInfo, hostname } from "node:os";
 import { YOU, addTask, finishTask, giveTask, openTasks, taskLines, taskNote, tasksOf } from "../core/tasks.js";
 
 const run = promisify(execFile);
@@ -812,6 +813,15 @@ async function cmdIndex() {
   process.stdout.write(JSON.stringify(out) + "\n");
 }
 
+/** What names this computer and its person, read here and only used here (core/intake.js identityTerms). */
+async function localIdentity() {
+  const acct = (await readJson(join(homedir(), ".claude.json")))?.oauthAccount ?? {};
+  let machines = [];
+  try { machines = (JSON.parse((await run("hc", ["machine", "ls", "--json"], { timeout: 10_000 })).stdout).machines ?? []).map((m) => m.name); } catch {}
+  let user = null; try { user = userInfo().username; } catch {}
+  return identityTerms({ names: [acct.displayName, acct.fullName, acct.organizationName], emails: [acct.emailAddress], user, host: hostname(), home: homedir(), machines });
+}
+
 /** omniloop propose "<request>" [--taken a,b]: a model's { id, goal, source } for a new loop, as JSON. The model sees
  *  only the request, run from an empty folder; on any failure the answer is slugify + the request (source "typed"). */
 async function cmdPropose({ flags, rest }) {
@@ -822,7 +832,7 @@ async function cmdPropose({ flags, rest }) {
   const cwd = await mkdtemp(join(tmpdir(), "omniloop-name-"));
   try {
     const { stdout } = await run(SHELL, ["-lc", 'exec claude "$@"', "omniloop", ...proposeArgs(request)], { cwd, timeout: 30_000, maxBuffer: 1 << 20 });
-    answer = checkProposal(JSON.parse(stdout), request, taken);
+    answer = checkProposal(JSON.parse(stdout), request, taken, { identity: await localIdentity() });
   } catch (e) {
     console.error(`omniloop: no model proposal (${String(e.message ?? e).split("\n")[0].slice(0, 120)}); using the request as typed`);
   } finally { await rm(cwd, { recursive: true, force: true }); }

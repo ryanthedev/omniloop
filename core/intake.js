@@ -48,14 +48,42 @@ export function fallbackProposal(request, taken = []) {
   return { id: slugify(request, taken), goal: oneLine(request).slice(0, MAX_GOAL), source: "typed" };
 }
 
+const wordsOf = (s) => String(s ?? "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+
+/**
+ * Words that name this computer or its person: the account's names and email, the local username, hostname and home
+ * path, other machines' names. `facts`: { names: [], emails: [], user, host, home, machines: [] } (any missing).
+ * Words under 3 letters are dropped (too common to mean anything). Pure: the CLI reads the facts.
+ */
+export function identityTerms(facts = {}) {
+  const raw = [...(facts.names ?? []), ...(facts.emails ?? []), facts.user, facts.host, facts.home, ...(facts.machines ?? [])];
+  const out = new Set();
+  for (const r of raw) for (const w of wordsOf(r)) if (w.length >= 3) out.add(w);
+  // Common words a path or a domain brings along mean nothing on their own.
+  for (const w of ["users", "home", "com", "net", "org", "dev", "local", "mail", "gmail", "the"]) out.delete(w);
+  return out;
+}
+
+/** The first identity word in the model's id or goal that the person didn't type themselves, or null. */
+export function identityLeak(answer, request, terms) {
+  if (!terms?.size) return null;
+  const typed = new Set(wordsOf(request));
+  for (const w of [...wordsOf(answer?.id), ...wordsOf(answer?.goal)]) if (terms.has(w) && !typed.has(w)) return w;
+  return null;
+}
+
 /**
  * Check a model answer. raw: the parsed `claude -p --output-format json` result (its structured_output), or
- * anything. Returns { id, goal, source: "model" }, or the fallback when the answer is unusable.
+ * anything. identity: identityTerms(...). Returns { id, goal, source: "model" }, or the fallback when the answer is
+ * unusable, names a path, or names this computer or its person.
  */
-export function checkProposal(raw, request, taken = []) {
+export function checkProposal(raw, request, taken = [], { identity = null } = {}) {
   const out = raw?.structured_output ?? raw;
   const id = cleanId(out?.id);
   const goal = oneLine(out?.goal);
   if (!id || !goal || goal.length > MAX_GOAL || PATHY.test(goal)) return fallbackProposal(request, taken);
+  // Code, not just the prompt: an answer naming this computer or its person (that the request didn't) is dropped,
+  // so nothing about here reaches a loop on another machine.
+  if (identityLeak({ id, goal }, request, identity)) return fallbackProposal(request, taken);
   return { id: uniqueId(id, taken), goal, source: "model" };
 }

@@ -147,3 +147,16 @@ test("suggestLoops: one word that is exactly a loop's id or folder name is enoug
   ], []);
   assert.deepEqual(suggestLoops(e, "make the omniloop picker use worktrees for shared folders").map((x) => x.id), ["omniloop", "panel"]);
 });
+
+test("identity guard (code, not prompt): a goal naming this computer or its person falls back to the typed text", async () => {
+  const { identityTerms, identityLeak } = await import("../core/intake.js");
+  const id = identityTerms({ names: ["Pat Example"], emails: ["pat@example.dev"], user: "pat", host: "pats-mbp.local", home: "/Users/pat", machines: ["ska", "vana"] });
+  assert.ok(id.has("pat") && id.has("example") && id.has("ska") && id.has("mbp") && !id.has("users") && !id.has("dev"));
+  const req = "fix the login timeout";
+  const leak = checkProposal({ structured_output: { id: "fix-login", goal: "Fix the login timeout Pat reported." } }, req, [], { identity: id });
+  assert.deepEqual(leak, { id: "fix-login-timeout", goal: "fix the login timeout", source: "typed" });
+  assert.equal(checkProposal({ structured_output: { id: "ska-login", goal: "Fix the login timeout." } }, req, [], { identity: id }).source, "typed");
+  // A word the person typed themselves is theirs to send.
+  assert.equal(identityLeak({ id: "deploy-to-ska", goal: "Deploy to ska." }, "deploy to ska", id), null);
+  assert.equal(checkProposal({ structured_output: { id: "fix-login", goal: "Fix the login timeout." } }, req, [], { identity: id }).source, "model");
+});
