@@ -70,6 +70,6 @@ for (const id of names) {
   for (const d of Array.isArray(m.dirs) ? m.dirs : []) dirs.push({ ...d, files: d.machine ? null : await filesOf(d.path) });
   const projects = [];
   for (const p of Array.isArray(m.projects) ? m.projects : []) projects.push(await project(p));
-  out.push({ id, goals: openGoals(m), dirs, projects, notes: await filesOf(dir), tasks: openTasks(tf ?? {}), touched });
+  out.push({ id, goals: openGoals(m), dirs, projects, notes: await filesOf(dir), tasks: openTasks(tf ?? {}), touched, temp: m.temp === true });
 }
 process.stdout.write(JSON.stringify(out));

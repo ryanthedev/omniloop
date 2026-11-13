@@ -75,6 +75,7 @@ export function allLoops(disk = [], live = []) {
     touched: d?.touched ?? 0,
     live: Boolean(l),
     local: Boolean(d),
+    temp: d?.temp === true, // a temporary loop: deleted once its last member exits
   }));
   // Needs you first, then the ones you were in most recently, then the most recently changed on disk.
   out.sort((a, b) => b.needsYou - a.needsYou || (b.lastWithYou ?? -1) - (a.lastWithYou ?? -1) || b.live - a.live

@@ -234,3 +234,10 @@ test("for-you words: the loop's label and a member's word replace counts and rea
   assert.equal(allLoops([], [{ ...live[1] }])[0].forYou, "2 for you");
   assert.equal(allLoops(disk, [])[0].forYou, "");
 });
+
+test("a temporary loop is marked temp", () => {
+  const ls = allLoops([{ ...disk[0], temp: true }, disk[1]], []);
+  assert.equal(ls.find((l) => l.id === "alpha").temp, true);
+  assert.equal(ls.find((l) => l.id === "beta").temp, false);
+  assert.equal(allLoops([], [live[1]])[0].temp, false);
+});
