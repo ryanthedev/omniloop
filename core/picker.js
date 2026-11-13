@@ -183,7 +183,7 @@ export function entryMatch(e, query) {
 }
 
 /**
- * A query's "@machine" token, apart from the rest: "@ska plenary" -> { machine: "ska", rest: "plenary" }. A lone "@"
+ * A query's "@machine" token, apart from the rest: "@m1 plenary" -> { machine: "m1", rest: "plenary" }. A lone "@"
  * is no filter. Only the first @token counts; any others stay in the rest.
  */
 export function splitMachine(query) {
