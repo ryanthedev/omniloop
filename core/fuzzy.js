@@ -66,6 +66,8 @@ export function snippet(text, query, n = 60) {
   if (t.length <= n) return t;
   const l = lower(t);
   const at = Math.max(0, Math.min(...tokens(query).map((q) => l.indexOf(q)).filter((i) => i >= 0), Infinity));
-  const start = at === Infinity ? 0 : Math.max(0, Math.min(at - Math.floor(n / 3), t.length - n));
+  let start = at === Infinity ? 0 : Math.max(0, Math.min(at - Math.floor(n / 3), t.length - n));
+  // Start on a word: skip forward past a cut word (never past the hit itself).
+  if (start > 0 && /\S/.test(t[start - 1])) { const sp = t.indexOf(" ", start); if (sp >= 0 && sp < (at === Infinity ? start + 15 : at)) start = sp + 1; }
   return `${start > 0 ? "…" : ""}${t.slice(start, start + n).trim()}${start + n < t.length ? "…" : ""}`;
 }

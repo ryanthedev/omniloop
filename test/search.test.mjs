@@ -130,3 +130,20 @@ test("folderRows / projectRows are fuzzy", () => {
   assert.deepEqual(folderRows(["/r/omniloop", "/r/plenary"], "omlp").map((r) => r.name), ["omniloop"]);
   assert.deepEqual(projectRows([{ name: "study", description: "" }], "sdy").map((r) => r.name), ["study"]);
 });
+
+test("a long goal doesn't match on scattered letters; snippets start on a word", () => {
+  const e = loopEntries([], [{ id: "x", goal: "we orchestrate key tasks reliably every evening", dirs: [], projects: [], tasks: [], feed: [], touched: 1 }], []);
+  assert.equal(pickerRows(e, "worktree").filter((r) => r.kind === "loop").length, 0);
+  const s = snippet("alpha beta gamma delta epsilon zeta eta theta needle iota kappa lambda", "needle", 30);
+  assert.ok(!/…[a-z]+a needle/.test(s) && s.includes("needle"));
+  assert.match(s, /^… ?[a-z]/);
+});
+
+test("suggestLoops: one word that is exactly a loop's id or folder name is enough", () => {
+  const e = loopEntries([], [
+    { id: "omniloop", goal: "Build it", dirs: ["/r/omniloop"], projects: [], tasks: [], feed: [], touched: 1 },
+    { id: "panel", goal: "The panel", dirs: ["/r/omniloop"], projects: [], tasks: [], feed: [], touched: 2 },
+    { id: "other", goal: "Else", dirs: ["/r/else"], projects: [], tasks: [], feed: [], touched: 3 },
+  ], []);
+  assert.deepEqual(suggestLoops(e, "make the omniloop picker use worktrees for shared folders").map((x) => x.id), ["omniloop", "panel"]);
+});

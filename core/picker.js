@@ -169,7 +169,7 @@ const FIELD_LABEL = { member: "session", folder: "folder", project: "project", t
 /** How an entry matches a query: { score, why } or null. `why` is one short line, only when the hit isn't in the id or goal. */
 export function entryMatch(e, query) {
   const m = fuzzyFields(query, [
-    { name: "id", text: e.id, weight: 3 }, { name: "goal", text: e.goal, weight: 2 },
+    { name: "id", text: e.id, weight: 3 }, { name: "goal", text: e.goal, weight: 2, long: true },
     { name: "member", text: e.members, weight: 1.2 }, { name: "folder", text: e.dirs.map(baseName), weight: 1.5 },
     { name: "project", text: e.projects, weight: 1.5 }, { name: "task", text: e.tasks, long: true }, { name: "chat", text: e.feed, weight: 0.8, long: true },
   ]);
@@ -202,7 +202,8 @@ const SUGGEST_STOP = new Set([...STOP, "fix", "add", "new", "get", "use", "work"
 /**
  * Existing loops that might already cover a goal you're writing, best first, at most `n`. Unlike search, a goal is
  * a sentence, so not every word must hit: a loop needs two of its meaningful words in its id, goal, folders or
- * projects (one when the goal has only one or two). Returns entries.
+ * projects (one when the goal has only one or two), or one word that is exactly its id, a folder's name or a
+ * project's name ("omniloop" names the loops working in ~/repos/omniloop). Returns entries.
  */
 export function suggestLoops(entries, goal, n = 3) {
   const ws = [...new Set(tokens(goal).map((w) => w.replace(/[^a-z0-9-]/g, "")).filter((w) => w.length >= 3 && !SUGGEST_STOP.has(w)))];
@@ -210,13 +211,15 @@ export function suggestLoops(entries, goal, n = 3) {
   const need = ws.length <= 2 ? 1 : 2;
   const scored = entries.map((e) => {
     const hay = [e.id, e.goal, ...e.dirs.map(baseName), ...e.projects];
-    let hits = 0, score = 0;
+    const names = new Set([e.id, ...e.dirs.map(baseName), ...e.projects].map((x) => String(x).toLowerCase()));
+    let hits = 0, score = 0, exact = 0;
     for (const w of ws) {
       const s = Math.max(0, ...hay.map((t) => tokenScore(w, t, { subsequence: false })));
       if (s > 0) { hits++; score += s; }
+      if (w === e.id) exact += 2; else if (names.has(w)) exact += 1;
     }
-    return { e, hits, score };
-  }).filter((x) => x.hits >= need);
-  scored.sort((a, b) => b.hits - a.hits || b.score - a.score || recency(a.e, b.e));
+    return { e, hits, score, exact };
+  }).filter((x) => x.hits >= need || x.exact > 0);
+  scored.sort((a, b) => b.exact - a.exact || b.hits - a.hits || b.score - a.score || recency(a.e, b.e));
   return scored.slice(0, n).map((x) => x.e);
 }

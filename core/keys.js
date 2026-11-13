@@ -9,14 +9,26 @@ export const KEYS = [
     ["⌘⇧U", "show or hide the docked Omniloop panel (⌘H / ⌘L move the keyboard into it)"],
     ["?", "this list (in the pane, or the picker with an empty box)"],
   ]],
-  ["PICKER", [
-    ["type", "describe what you want to do; loops rank against it"],
+  ["PICKER (⌘O)", [
+    ["type", "fuzzy-search every loop: name, goal, sessions, folders, projects, tasks, recent chat"],
     ["↑ ↓", "move"],
     ["ctrl-n ctrl-p", "move (next / previous)"],
-    ["Enter", "jump to a loop's lead, or start a new loop"],
-    ["Tab", "new loop: pick its machine (when you have others), tick or untick a project or folder"],
+    ["Enter", "jump to a loop's lead (pinned first, then the loops you talked to last)"],
+    ["⌘P", "pin or unpin the loop under the cursor (numbered 1-9)"],
+    ["⌘↑ ⌘↓", "move a pinned loop up or down"],
+    ["⌘Enter", "start a new loop from what you typed"],
     ["Esc", "back a step, then close"],
-    ["click", "same as Enter (Tab on a project or folder)"],
+    ["click", "same as Enter"],
+  ]],
+  ["NEW LOOP", [
+    ["Enter", "machine (when you have others), then goal, then folders and projects, then check"],
+    ["type", "goal step: loops that might already cover it show below; Enter on one opens it"],
+    ["Tab", "folders and projects step: add or remove the one under the cursor"],
+    ["↑ ↓", "check step: switch between the folder name and the goal; type to edit"],
+    ["Enter", "check step: create the loop, its space and its lead"],
+  ]],
+  ["PINS (leader)", [
+    ["ctrl-space y u i o", "jump to pinned loop 1-4's lead"],
   ]],
   ["OMNILOOP PANE", [
     ["click", "a loop's name: fold or unfold its members"],
