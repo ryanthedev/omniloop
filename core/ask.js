@@ -29,3 +29,9 @@ export function isHumanPrompt(prompt) {
   const p = String(prompt ?? "").trimStart();
   return p !== "" && !p.startsWith("omniloop:") && !p.startsWith("<hc from=") && !p.startsWith("<cross-session-message") && !p.startsWith("Another Claude session sent a message");
 }
+
+/** Is this terminal (the JSON of `hc get --json`) a loop member? It carries the `omniloop` label (the loop id).
+ *  The plugin's hooks run in every Claude once the user's alias loads it: outside a loop they must do nothing. */
+export function isLoopTerminal(t) {
+  return typeof t?.labels?.omniloop === "string" && t.labels.omniloop !== "";
+}

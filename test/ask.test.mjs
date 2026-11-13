@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { asksUser, lastAssistantText, isHumanPrompt } from "../core/ask.js";
+import { asksUser, lastAssistantText, isHumanPrompt, isLoopTerminal } from "../core/ask.js";
 import { goalNote, setGoal } from "../core/goals.js";
 import { taskNote } from "../core/tasks.js";
 import { initState, step } from "../core/watch.js";
@@ -77,14 +77,15 @@ test("isHumanPrompt: omniloop's own typed notes are not you (goal note, task not
 
 // ---- the hook itself, with a fake hc first on PATH ----
 
+const MEMBER = JSON.stringify({ labels: { omniloop: "L" } });
 function rig(fn) {
   const dir = mkdtempSync(join(tmpdir(), "askhook-"));
   const bin = join(dir, "bin"), calls = join(dir, "calls"), home = join(dir, "home");
   mkdirSync(bin);
-  writeFileSync(join(bin, "hc"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${calls}"\n`);
+  writeFileSync(join(bin, "hc"), `#!/bin/sh\nif [ "$1" = get ]; then printf '%s\\n' "$*" >> "${calls}.get"; printf '%s' "$HC_FAKE_GET"; exit 0; fi\nprintf '%s\\n' "$*" >> "${calls}"\n`);
   chmodSync(join(bin, "hc"), 0o755);
   const run = (input, env = {}) => spawnSync("node", [HOOK], { input: typeof input === "string" ? input : JSON.stringify(input), encoding: "utf8",
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, OMNILOOP_HOME: home, HC_TERMINAL_ID: "t9", ...env } });
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, OMNILOOP_HOME: home, HC_TERMINAL_ID: "t9", HC_FAKE_GET: MEMBER, ...env } });
   const seen = () => (existsSync(calls) ? readFileSync(calls, "utf8").trim().split("\n") : []);
   try { return fn({ run, seen, home, calls }); } finally { rmSync(dir, { recursive: true, force: true }); }
 }
@@ -140,4 +141,35 @@ test("ask-hook: a nested claude (another live session owns the terminal) labels 
   writeFileSync(join(home, "sessions", "t9.json"), JSON.stringify({ address: "t9", pid: process.pid, sessionId: "s1" }));
   run(stop("Why?"), { CLAUDE_PID: "1" });
   assert.deepEqual(seen(), ["label t9 omniloop.ask=1"]);
+}));
+
+test("isLoopTerminal: only a non-empty omniloop label counts", () => {
+  assert.equal(isLoopTerminal({ labels: { omniloop: "me/loop" } }), true);
+  for (const t of [{ labels: {} }, { labels: { omniloop: "" } }, { labels: { "omniloop.ask": "1" } }, {}, null, undefined, { labels: { omniloop: 1 } }])
+    assert.equal(isLoopTerminal(t), false);
+});
+
+test("ask-hook: outside a loop (no omniloop label, hc get fails or is garbage) it labels nothing and prints nothing", () => rig(({ run, seen }) => {
+  for (const get of [JSON.stringify({ labels: { foo: "x" } }), "{}", "", "not json"])
+    for (const input of [stop("Why?"), prompt("hello")]) {
+      const r = run(input, { HC_FAKE_GET: get });
+      assert.equal(r.status, 0); assert.equal(r.stdout, ""); assert.equal(r.stderr, "");
+    }
+  assert.deepEqual(seen(), []);
+}));
+
+test("ask-hook: a hand-started Claude in a loop terminal (labelled, no prior session record) still sets omniloop.you", () => rig(({ run, seen, calls }) => {
+  run(prompt("hello"), { HC_FAKE_GET: JSON.stringify({ labels: { omniloop: "m/loop", "omniloop.lead": "1" } }) });
+  assert.match(seen()[0], /^label t9 omniloop\.ask= omniloop\.you=\d+$/);
+  assert.equal(readFileSync(`${calls}.get`, "utf8").trim(), "get --json t9");
+}));
+
+test("goal-hook: outside a loop (unlabelled terminal, no loop.json) prints nothing and writes nothing", () => rig(({ run, calls }) => {
+  const home = mkdtempSync(join(tmpdir(), "goalhome-"));
+  try {
+    const r = spawnSync("node", [HOOK.replace("ask-hook", "goal-hook")], { cwd: home, encoding: "utf8", input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "s1", cwd: home }),
+      env: { ...process.env, HOME: home, PATH: `${dirname(calls)}/bin:${process.env.PATH}`, HC_TERMINAL_ID: "t9", HC_FAKE_GET: "{}" } });
+    assert.equal(r.status, 0); assert.equal(r.stdout, ""); assert.equal(r.stderr, "");
+    assert.equal(existsSync(join(home, ".cache")), false);
+  } finally { rmSync(home, { recursive: true, force: true }); }
 }));

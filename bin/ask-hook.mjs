@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Claude Code hook (Stop, UserPromptSubmit) for loop members. Labels only the terminal it runs in ($HC_TERMINAL_ID):
+// Claude Code hook (Stop, UserPromptSubmit) for loop members; inert in any other terminal. Labels only the terminal it runs in ($HC_TERMINAL_ID):
 //   Stop:             omniloop.ask=1 when the agent's last message asks the user something, else removed.
 //   UserPromptSubmit: omniloop.ask removed; and when a person typed the prompt (not another agent), omniloop.you=<now>,
 //                     which the watcher reads as "you interacted" (SPEC.md, When you last interacted).
@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { addressOf, pidOf, foreign } from "../core/turns.js";
-import { asksUser, lastAssistantText, isHumanPrompt } from "../core/ask.js";
+import { asksUser, lastAssistantText, isHumanPrompt, isLoopTerminal } from "../core/ask.js";
 
 const quiet = () => process.exit(0);
 process.on("uncaughtException", quiet);
@@ -26,6 +26,11 @@ try {
     const alive = (p) => { try { process.kill(p, 0); return true; } catch (e) { return e.code === "EPERM"; } };
     if (foreign(prev, { input, pid: pidOf(process.env, process.ppid) }, alive)) quiet();
   }
+  // The plugin may be loaded by the user's own alias, in any Claude: only a loop member's terminal (label `omniloop`)
+  // gets labels. A failed or unreadable `hc get` counts as "not a member".
+  try {
+    if (!isLoopTerminal(JSON.parse(execFileSync("hc", ["get", "--json", id], { timeout: 2000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })))) quiet();
+  } catch { quiet(); }
   const label = (...kv) => execFileSync("hc", ["label", id, ...kv], { stdio: "ignore", timeout: 4000 });
   if (input.hook_event_name === "Stop") {
     let text = typeof input.last_assistant_message === "string" ? input.last_assistant_message : "";
