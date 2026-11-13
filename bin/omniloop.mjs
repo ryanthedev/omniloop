@@ -800,7 +800,11 @@ Only the lead (and needs-you) reaches the user; answer your helpers' questions y
 async function dropAlias(id) {
   const p = loopHome(homedir(), id);
   const st = await lstat(p).catch(() => null);
-  if (st?.isSymbolicLink() && (await manifestOf(id))?.id !== id) await rm(p, { force: true });
+  if (!st?.isSymbolicLink() || (await manifestOf(id))?.id === id) return;
+  await rm(p, { force: true });
+  // and its Claude project link, or the new loop's sessions would be saved with the renamed one's
+  const ck = join(homedir(), ".claude", "projects", claudeProjectKey(p));
+  if ((await lstat(ck).catch(() => null))?.isSymbolicLink()) await rm(ck, { force: true });
 }
 
 /** The names in ~/loops that link to this loop's folder (left by renames). */
@@ -942,7 +946,7 @@ async function cmdRm({ flags, rest }) {
   if (live.length && !inside && !force) die(`${id} has ${live.length} running member(s) (${live.map((t) => t.address).join(", ")}): rerun with --force to stop them, or run it from inside the loop`);
   const sp = await loopSpace(id);
   const aliases = await aliasesOf(home);
-  const job = { id, home, root, space: sp?.id ?? null, terms: (members ?? []).map((t) => t.address), purge, aliases, formerly: (m.formerly ?? []).map((f) => loopHome(homedir(), f.id)) };
+  const job = { id, home, root, space: sp?.id ?? null, terms: (members ?? []).map((t) => t.address), purge, aliases, formerly: await formerHomes(m, home) };
   if (flags["dry-run"]) return console.log(JSON.stringify({ worktrees: wts.map((w) => w.worktree), ...job }, null, 1));
 
   const lines = [];
@@ -957,15 +961,40 @@ async function cmdRm({ flags, rest }) {
   for (const l of lines) console.log(l);
   // The rest (stopping members, closing the space, deleting the folder and transcripts) runs detached: when this runs
   // inside the loop, closing the space ends this very process.
-  const p = spawn(process.execPath, [fileURLToPath(import.meta.url), "_reap", JSON.stringify(job)], { cwd: tmpdir(), detached: true, stdio: "ignore" });
+  await mkdir(join(HOME, "reap"), { recursive: true, mode: 0o700 });
+  const jobFile = join(HOME, "reap", `${id}-${process.pid}-${Date.now().toString(36)}.json`);
+  await writeFile(jobFile, JSON.stringify(job), { mode: 0o600 });
+  const p = spawn(process.execPath, [fileURLToPath(import.meta.url), "_reap", jobFile], { cwd: tmpdir(), detached: true, stdio: "ignore" });
   p.unref();
+}
+
+/** A loop's former folders that no other loop has taken since (their names are free, or still link to this loop). */
+async function formerHomes(m, home) {
+  const out = [];
+  for (const f of m.formerly ?? []) {
+    if (!validId(f.id)) continue;
+    const p = loopHome(homedir(), f.id);
+    const st = await lstat(p).catch(() => null);
+    if (!st || (st.isSymbolicLink() && (await realpath(p).catch(() => null)) === home)) out.push(p);
+  }
+  return out;
 }
 
 /** The detached second half of rm. Stops the loop's terminals, then deletes; checks the folder again before any rm. */
 async function cmdReap({ rest }) {
-  const job = JSON.parse(rest[0]);
+  // The job comes in a private file rm wrote (0600, in OMNILOOP_HOME); root and home are worked out again here.
+  const file = rest[0];
+  if (!file || dirname(file) !== join(HOME, "reap") || !(await lstat(file).catch(() => null))?.isFile()) return;
+  const job = await readJson(file);
+  await rm(file, { force: true });
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  if (!validId(job.id) || job.home !== join(job.root, job.id)) return;
+  if (!job || !validId(job.id)) return;
+  const root = await realpath(join(homedir(), LOOPS_DIR)).catch(() => null);
+  if (!root || job.home !== join(root, job.id) || job.root !== root) return;
+  const under = (p) => typeof p === "string" && dirname(p) === root;
+  job.aliases = (job.aliases ?? []).filter(under);
+  job.formerly = (job.formerly ?? []).filter(under);
+  job.terms = (job.terms ?? []).filter((t) => /^[\w-]+$/.test(t));
   await wait(800); // let rm's caller finish printing
   for (const t of job.terms) await run("hc", ["kill", t]).catch(() => {});
   if (job.space) await run("herdr-app", ["do", "space.close", JSON.stringify({ id: job.space, confirmed: true })]).catch(() => {});
@@ -976,7 +1005,7 @@ async function cmdReap({ rest }) {
   }
   await wait(1000); // a stopping Claude session writes its transcript last
   for (const t of job.terms) await run("hc", ["rm", t]).catch(() => {});
-  for (const a of job.aliases) if (dirname(a) === job.root) await rm(a, { force: true });
+  for (const a of job.aliases) if ((await lstat(a).catch(() => null))?.isSymbolicLink()) await rm(a, { force: true });
   if ((await realpath(job.home).catch(() => null)) === job.home) await rm(job.home, { recursive: true, force: true });
   if (job.purge) await purgeTraces(job);
 }
@@ -990,6 +1019,8 @@ async function purgeTraces(job) {
   for (const n of await readdir(projects).catch(() => [])) {
     if (!keys.some((k) => isLoopClaudeEntry(n, k))) continue;
     const dir = join(projects, n);
+    // A former name's own folder (not a link) belongs to whatever loop took that name since: leave it.
+    if (keys.slice(1).includes(n) && !(await lstat(dir).catch(() => null))?.isSymbolicLink()) continue;
     for (const f of await readdir(dir).catch(() => [])) if (f.endsWith(".jsonl")) sessions.push(f.slice(0, -6));
     await rm(dir, { recursive: true, force: true });
   }

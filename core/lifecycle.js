@@ -36,10 +36,21 @@ export function renamedManifest(m, { from, to, fromHome, toHome, now }) {
   return { ...m, id: to, dirs, formerly: [...(m.formerly ?? []), { id: from, at: now }] };
 }
 
-/** Replace the loop id where it stands as a whole id (not inside a longer one) in CLAUDE.md text. */
+/**
+ * Put the new id into the slots omniloop's CLAUDE.md template gives it (title, member line, tools table, Engram
+ * lines). Only those: an id like "omniloop" or "engram" also names commands and markers, which must stay.
+ */
 export function renameText(text, from, to) {
-  const esc = from.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
-  return String(text).replace(new RegExp(`(?<![A-Za-z0-9_-])${esc}(?![A-Za-z0-9_])(?!-(?:[a-z0-9]))`, "g"), to);
+  const e = from.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
+  const slots = [
+    [new RegExp(`^# Loop: ${e}$`, "m"), `# Loop: ${to}`],
+    [new RegExp(`member of the omniloop \`${e}\``, "g"), `member of the omniloop \`${to}\``],
+    [new RegExp(`\`omniloop (ls|start) ${e}(?=[\` ])`, "g"), (_, c) => `\`omniloop ${c} ${to}`],
+    [new RegExp(`engram search "${e} `, "g"), `engram search "${to} `],
+    [new RegExp(`--event-id ${e}-<`, "g"), `--event-id ${to}-<`],
+    [new RegExp(`--source "loop ${e}"`, "g"), `--source "loop ${to}"`],
+  ];
+  return slots.reduce((t, [re, by]) => t.replace(re, by), String(text));
 }
 
 /** Add (once) a line under the Memory heading saying what the loop used to be called. */

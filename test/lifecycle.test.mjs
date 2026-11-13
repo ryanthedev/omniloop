@@ -29,9 +29,14 @@ test("renamedManifest moves worktrees with the folder and renames the loop's bra
   assert.equal(m.id, "a", "pure");
 });
 
-test("renameText replaces whole ids, not longer ones", () => {
-  const t = "# Loop: crud\n`omniloop ls crud` --event-id crud-<topic>-<date> crud/work crud-2 omnicrud crud.";
-  assert.equal(renameText(t, "crud", "edit"), "# Loop: edit\n`omniloop ls edit` --event-id edit-<topic>-<date> edit/work crud-2 omnicrud edit.");
+test("renameText fills the template's id slots and leaves everything else, even for an id like omniloop", () => {
+  const md = claudeMd({ id: "omniloop", goal: "g", dirs: [] }) + "\n- 2026: we chose omniloop rename over omniloop mv.\n";
+  const out = renameText(md, "omniloop", "loops2");
+  assert.equal(out, renameText(claudeMd({ id: "omniloop", goal: "g", dirs: [] }), "omniloop", "loops2") + "\n- 2026: we chose omniloop rename over omniloop mv.\n");
+  assert.equal(out.replace(/\n- 2026.*\n$/, ""), claudeMd({ id: "loops2", goal: "g", dirs: [] }), "same as a fresh CLAUDE.md for the new id");
+  assert.match(out, /<!-- omniloop:context -->/);
+  const crud = claudeMd({ id: "crud", goal: "g", dirs: [] });
+  assert.equal(renameText(crud, "crud", "edit"), claudeMd({ id: "edit", goal: "g", dirs: [] }));
 });
 
 test("a renamed loop's CLAUDE.md says what it was called, once", () => {

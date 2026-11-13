@@ -63,7 +63,7 @@ for (const id of names) {
   if (!validId(id)) continue;
   const dir = join(root, id);
   const m = await json(join(dir, "loop.json"));
-  if (!m || typeof m !== "object") continue;
+  if (!m || typeof m !== "object" || (m.id && m.id !== id)) continue; // a renamed loop's old name links to the new folder
   const tf = await json(join(dir, "tasks.json"));
   const touched = Math.max(await mtime(join(dir, "loop.json")), await mtime(join(dir, "tasks.json")), await mtime(join(dir, "feed.jsonl")));
   const dirs = [];

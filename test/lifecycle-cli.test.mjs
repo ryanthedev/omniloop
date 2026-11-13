@@ -42,7 +42,11 @@ test("rename moves the folder, worktree and branch; the old name links to it; ta
   s.omniloop("task", "add", "write it", "--for", "you", "--loop", "crud");
   s.omniloop("task", "add", "test it", "--for", "you", "--loop", "crud");
 
+  const ckey = (id) => join(s.home, ".claude/projects", claudeProjectKey(join(s.home, "loops", id)));
+  mkdirSync(ckey("crud"), { recursive: true }); writeFileSync(join(ckey("crud"), "s.jsonl"), "{}\n");
   const out = s.omniloop("rename", "crud", "edit");
+  assert.ok(lstatSync(ckey("crud")).isSymbolicLink(), "running sessions keep writing to the moved transcripts");
+  assert.ok(existsSync(join(ckey("edit"), "s.jsonl")));
   assert.match(out, /renamed crud to edit/);
   const m = s.manifest("edit");
   assert.equal(m.id, "edit");
@@ -75,6 +79,8 @@ test("rename moves the folder, worktree and branch; the old name links to it; ta
   s.omniloop("new", "crud", "--goal", "again", "--no-lead");
   assert.equal(s.manifest("crud").id, "crud");
   assert.ok(!lstatSync(join(s.home, "loops/crud")).isSymbolicLink());
+  assert.ok(!existsSync(ckey("crud")) || !lstatSync(ckey("crud")).isSymbolicLink(), "the new crud's sessions don't land in edit's transcripts");
+  assert.ok(existsSync(join(ckey("edit"), "s.jsonl")));
 });
 
 test("rm refuses unmerged work, then removes the loop and its worktree but never the repo", async () => {
