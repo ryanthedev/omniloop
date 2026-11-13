@@ -235,3 +235,37 @@ export function touchedByYou(prev, next) {
 export function withoutReplies(text) {
   return String(text ?? "").replace(/, last reply: «[^»]*»/g, "");
 }
+
+/** A new console waits this long before it's adopted, so a terminal its maker labels right after making it
+ *  (`omniloop new` starting a lead with `tab.new`, then labelling it) is left alone. */
+export const ADOPT_AFTER_MS = 3 * 1000;
+/** A new console not adoptable by then (no space label, a space with no loop) is dropped from the candidates. */
+export const ADOPT_WITHIN_MS = 60 * 1000;
+
+/**
+ * A console made in a loop's space (Herdr's + menu: `tab.new`, which sets no omniloop labels) joins that loop,
+ * reporting to its lead. Only new consoles (`candidates`: address -> when the watcher saw it created), so what was
+ * already open is never swept in, and `omniloop leave` sticks. A space is a loop's when every live, labelled member
+ * on this machine in it belongs to that one loop. Returns { adopt: [{ address, loop, to }], keep: candidates still
+ * waiting }. `to` is null when the loop has no lead (you lead it).
+ */
+export function adoptions(candidates, terminals, now) {
+  const ts = terminals ?? [];
+  const live = (t) => t && (!t.state || t.state === "live");
+  const local = (t) => !machineOf(t.address);
+  const built = buildLoops(ts);
+  const adopt = [], keep = {};
+  for (const [address, seen] of Object.entries(candidates ?? {})) {
+    const t = ts.find((x) => x.address === address);
+    if (!live(t) || !local(t) || t.labels?.[LABEL.loop] || t.labels?.[LABEL.retired] || t.parent || t.name === "omniloop-watch") continue;
+    if (now - seen > ADOPT_WITHIN_MS) continue;
+    const space = t.labels?.["herdr.space"];
+    if (!space || now - seen < ADOPT_AFTER_MS) { keep[address] = seen; continue; }
+    const loops = new Set(ts.filter((x) => x !== t && live(x) && local(x) && !x.labels?.[LABEL.retired] && x.labels?.["herdr.space"] === space && x.labels?.[LABEL.loop])
+      .map((x) => x.labels[LABEL.loop]));
+    if (loops.size !== 1) { if (!loops.size) keep[address] = seen; continue; }
+    const loop = [...loops][0];
+    adopt.push({ address, loop, to: built.loops.find((l) => l.id === loop)?.lead ?? null });
+  }
+  return { adopt, keep };
+}

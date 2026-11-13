@@ -97,6 +97,17 @@ it checks timers and stalls.
 Token cost, measured in the end-to-end test (fake agents, 2026-11-12): two notes, 58 characters, for a
 blocked builder plus a timer; zero tokens while nothing happened.
 
+### A console made in a loop's space joins the loop (2026-11-13)
+
+Herdr's **+** menu (`tab.new`) makes a terminal with no omniloop labels. Left that way, the panel jumped to an
+unrelated loop ("top of the list") and the loop tab bar dropped it. So the watcher adopts it: a terminal it sees
+**created** (never one already open), live, on this machine, unlabelled, not a `parent` helper and not named
+`omniloop-watch`, gets `omniloop=<id>` and `omniloop.to=<lead>` (no `to` when you lead) when every live, labelled,
+unretired member in its `herdr.space` belongs to one loop. It waits 3 s first (`ADOPT_AFTER_MS`), so a terminal its
+maker labels right after making it (`omniloop new` starting a lead with `tab.new`) is left alone, and gives up after
+60 s. Two loops in one space, or none: left alone. `omniloop leave --terminal <t>` undoes it and sticks. Only the
+all-loops watcher adopts (not `--loop` or `--dry-run`). Rule: `core/watch.js` `adoptions`.
+
 ## When you last interacted
 
 Each loop shows when you last interacted with it ("you 5m"), and the view ranks loops by it, newest first

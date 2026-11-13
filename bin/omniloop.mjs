@@ -11,7 +11,7 @@ import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LABEL, buildLoops, statusOf } from "../core/omniloop.js";
-import { initState, step, parseDuration, touchedByYou, sendFailed, hold, withoutReplies } from "../core/watch.js";
+import { initState, step, parseDuration, touchedByYou, sendFailed, hold, withoutReplies, adoptions } from "../core/watch.js";
 import { validId, loopHome, newManifest, addDir, removeDir, dirsOn, launchDirsOn, worktreeChoice, worktreeTarget, worktreeBranch, setWorktree, overlaps, claudeMd, updateClaudeMd, memberArgv, parseAliasWords, sharedWith, LOOPS_DIR } from "../core/loopdir.js";
 import { matchProjects, addProject, removeProject, projectLaunch, withProjectsBlock } from "../core/projects.js";
 import { goalsOf, openGoals, setGoal, addGoal, finishGoal, editGoal, withGoalBlock, goalNote } from "../core/goals.js";
@@ -1075,6 +1075,7 @@ async function cmdWatch({ flags }) {
   } catch {}
 
   const terms = new Map();
+  let newConsoles = {}; // address -> when it was created, until adopted or given up (core/watch.js adoptions)
   let state = null, ready = false, timer = null, sent = 0, chars = 0;
   const sentAt = {};
   const MONTH = 30 * 86400_000;
@@ -1094,6 +1095,17 @@ async function cmdWatch({ flags }) {
     // Each member's last turn (its Stop hook's record): finished-turn notes carry the reply, and skip what it already said.
     const turns = {};
     await Promise.all([...terms.keys()].map(async (a) => { const t = await turnRecord(a); if (t) turns[a] = t; }));
+    // A console made in a loop's space joins that loop (core/watch.js adoptions). Not in a dry run or a one-loop watcher.
+    if (!quiet && !loop && Object.keys(newConsoles).length) {
+      const a = adoptions(newConsoles, [...terms.values()], Date.now());
+      newConsoles = a.keep;
+      for (const { address, loop: l, to } of a.adopt) {
+        const kv = [`${LABEL.loop}=${l}`, ...(to ? [`${LABEL.reportsTo}=${to}`] : [])];
+        await hc(["label", address, ...kv], { json: false })
+          .then(() => log("ADOPT", address, `joined ${l}${to ? `, reports to ${to}` : ""}`))
+          .catch((e) => log("ADOPT", address, `failed: ${String(e.message ?? e).slice(0, 100)}`));
+      }
+    }
     const r = step(state, [...terms.values()], Date.now(), { loop, turns });
     // Timers that fired are gone from state: remove their files.
     const left = new Set(r.state.timers.map((t) => t.id));
@@ -1176,7 +1188,7 @@ async function cmdWatch({ flags }) {
     const p = msg.params;
     if (!p?.terminal) return;
     const cur = terms.get(p.terminal);
-    if (p.type === "created") terms.set(p.terminal, { ...p.data, event_ms: now });
+    if (p.type === "created") { terms.set(p.terminal, { ...p.data, event_ms: now }); if (ready) newConsoles[p.terminal] = now; }
     else if (p.type === "removed") terms.delete(p.terminal);
     else if (cur) {
       const d = p.data ?? {};

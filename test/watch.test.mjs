@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { initState, step, parseDuration, STALL_MS, START_MS, startingClaude, sendFailed, hold, withoutReplies, REPLY_WAIT_MS } from "../core/watch.js";
+import { initState, step, parseDuration, STALL_MS, START_MS, startingClaude, sendFailed, hold, withoutReplies, REPLY_WAIT_MS, adoptions, ADOPT_AFTER_MS, ADOPT_WITHIN_MS } from "../core/watch.js";
 import { ESCALATE_MS } from "../core/omniloop.js";
 
 const T = (address, status, labels = {}, extra = {}) =>
@@ -428,4 +428,53 @@ test("a finished turn waits briefly for its Stop hook's reply, then goes without
 
 test("a typed note never carries an agent's relayed reply", () => {
   assert.equal(withoutReplies("omniloop: t3 finished its turn, last reply: «do X» · t4 blocked: why"), "omniloop: t3 finished its turn · t4 blocked: why");
+});
+
+// ---- adoptions: a console made in a loop's space joins that loop -------------------------------
+
+const SP = (space, labels = {}) => ({ "herdr.space": space, ...labels });
+const room = () => [
+  T("t1", "done", SP("spA", L({ "omniloop.lead": "1" }))),
+  T("t2", "working", SP("spA", L({ "omniloop.to": "t1" }))),
+  T("t9", "done", SP("spB", { omniloop: "other", "omniloop.lead": "1" })),
+];
+
+test("adopt: a new console in a loop's space joins it, reporting to the lead", () => {
+  const ts = [...room(), T("t5", null, SP("spA"))];
+  const r = adoptions({ t5: 0 }, ts, ADOPT_AFTER_MS);
+  assert.deepEqual(r.adopt, [{ address: "t5", loop: "m2", to: "t1" }]);
+  assert.deepEqual(r.keep, {});
+});
+
+test("adopt: waits a moment, so a terminal its maker labels right away is left alone", () => {
+  const ts = [...room(), T("t5", null, SP("spA"))];
+  assert.deepEqual(adoptions({ t5: 0 }, ts, ADOPT_AFTER_MS - 1), { adopt: [], keep: { t5: 0 } });
+  const labelled = [...room(), T("t5", null, SP("spA", L({ "omniloop.lead": "1" })))];
+  assert.deepEqual(adoptions({ t5: 0 }, labelled, ADOPT_AFTER_MS), { adopt: [], keep: {} });
+});
+
+test("adopt: a space label that arrives late still counts; a console that never gets one is dropped", () => {
+  const bare = [...room(), T("t5", null, {})];
+  assert.deepEqual(adoptions({ t5: 0 }, bare, ADOPT_AFTER_MS), { adopt: [], keep: { t5: 0 } });
+  assert.deepEqual(adoptions({ t5: 0 }, bare, ADOPT_WITHIN_MS + 1), { adopt: [], keep: {} });
+});
+
+test("adopt: no loop, two loops, another machine, a helper or a finished console: left alone", () => {
+  const none = [...room(), T("t5", null, SP("spC"))];
+  assert.deepEqual(adoptions({ t5: 0 }, none, ADOPT_AFTER_MS).adopt, []);
+  const mixed = [...room(), T("t8", "done", SP("spA", { omniloop: "other" })), T("t5", null, SP("spA"))];
+  assert.deepEqual(adoptions({ t5: 0 }, mixed, ADOPT_AFTER_MS), { adopt: [], keep: {} });
+  const remote = [...room(), T("m1/t5", null, SP("spA"))];
+  assert.deepEqual(adoptions({ "m1/t5": 0 }, remote, ADOPT_AFTER_MS).adopt, []);
+  const helper = [...room(), T("t5", null, SP("spA"), { parent: "t1" })];
+  assert.deepEqual(adoptions({ t5: 0 }, helper, ADOPT_AFTER_MS).adopt, []);
+  const gone = [...room(), T("t5", null, SP("spA"), { state: "finished" })];
+  assert.deepEqual(adoptions({ t5: 0 }, gone, ADOPT_AFTER_MS).adopt, []);
+});
+
+test("adopt: a loop with no lead (you lead it) adopts with no parent; retired members don't claim a space", () => {
+  const nolead = [T("t2", "done", SP("spA", L())), T("t5", null, SP("spA"))];
+  assert.deepEqual(adoptions({ t5: 0 }, nolead, ADOPT_AFTER_MS).adopt, [{ address: "t5", loop: "m2", to: null }]);
+  const retired = [T("t2", "done", SP("spA", L({ "omniloop.retired": "t3" }))), T("t5", null, SP("spA"))];
+  assert.deepEqual(adoptions({ t5: 0 }, retired, ADOPT_AFTER_MS).adopt, []);
 });
