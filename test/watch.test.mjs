@@ -121,14 +121,17 @@ test("never type into a plain shell: a parent with no agent status gets nothing,
   assert.ok(r.actions.some((a) => a.type === "you" && a.alert.why === "its parent isn't an agent now"));
 });
 
-test("touchedByYou: a seen mark, or a you-facing agent starting work that the watcher didn't cause", async () => {
+test("touchedByYou: only the omniloop.you label changing to a value counts", async () => {
   const { touchedByYou } = await import("../core/watch.js");
-  const a = (status, seen) => ({ status: { state: status }, labels: seen == null ? {} : { "herdr.seen": seen } });
-  assert.equal(touchedByYou(a("done", "3"), a("idle", "4")), true);                                  // looked at it
-  assert.equal(touchedByYou(a("idle"), a("working"), { reportsToYou: true }), true);                 // you prompted it
-  assert.equal(touchedByYou(a("idle"), a("working"), { reportsToYou: false }), false);               // a helper: not you
-  assert.equal(touchedByYou(a("idle"), a("working"), { reportsToYou: true, sentAt: 0, now: 5000 }), false); // the watcher's note
-  assert.equal(touchedByYou(a("working"), a("done"), { reportsToYou: true }), false);
+  const a = (status, labels = {}) => ({ status: { state: status }, labels });
+  assert.equal(touchedByYou(a("idle"), a("idle", { "omniloop.you": "100" })), true);                         // a person prompted it
+  assert.equal(touchedByYou(a("idle", { "omniloop.you": "100" }), a("idle", { "omniloop.you": "200" })), true);
+  assert.equal(touchedByYou(a("idle", { "omniloop.you": "100" }), a("working", { "omniloop.you": "100" })), false); // unchanged
+  assert.equal(touchedByYou(a("idle", { "omniloop.you": "100" }), a("idle", { "omniloop.you": "" })), false);       // removed
+  assert.equal(touchedByYou(a("done", { "herdr.seen": "3" }), a("idle", { "herdr.seen": "4" })), false);            // no longer a signal
+  assert.equal(touchedByYou(a("idle"), a("working")), false);   // an agent's message looks like this: not you
+  assert.equal(touchedByYou(a("working"), a("done")), false);
+  assert.equal(touchedByYou(null, a("idle", { "omniloop.you": "1" })), false);
 });
 
 test("joining a loop isn't news: a member that arrives already done is told nothing", () => {

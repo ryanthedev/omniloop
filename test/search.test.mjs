@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { tokenScore, fuzzyFields, snippet } from "../core/fuzzy.js";
 import { sanitizePins, togglePin, movePin, slotOf, MAX_PINS } from "../core/pins.js";
 import { cleanId, uniqueId, checkProposal, fallbackProposal, proposeArgs, PROPOSE_SYSTEM } from "../core/intake.js";
-import { loopEntries, pickerRows, entryMatch, suggestLoops, folderRows, projectRows } from "../core/picker.js";
+import { loopEntries, pickerRows, entryMatch, suggestLoops, folderRows, projectRows, splitMachine, onMachine, LOCAL_NAME } from "../core/picker.js";
 
 // ---- fuzzy ----
 
@@ -167,4 +167,54 @@ test("person guard: 'the user', he/she in a goal the request didn't use falls ba
   assert.equal(personLeak("Fix the bug he found.", "fix the bug"), "he");
   assert.equal(personLeak("Plan their trip.", "plan their trip"), null);
   assert.equal(checkProposal({ structured_output: { id: "x-y", goal: "Fix what the user saw." } }, "fix what i saw").source, "typed");
+});
+
+// ---- machine chip, search and @filter ----
+
+const mk = () => loopEntries(
+  [{ id: "plenary", goal: "ship", rows: [] }, { id: "ska/plenary-ska", goal: "remote one", rows: [] }, { id: "vana/other", goal: "x", rows: [] }],
+  [{ id: "plenary", goal: "ship" }, { id: "idle-one", goal: "nobody here" }]);
+
+test("machine: every entry has a chip name; this computer's is 'this mac' unless named", () => {
+  const es = mk();
+  assert.deepEqual(es.map((e) => [e.key, e.where]), [["plenary", LOCAL_NAME], ["ska/plenary-ska", "ska"], ["vana/other", "vana"], ["idle-one", LOCAL_NAME]]);
+  assert.equal(LOCAL_NAME, "this mac");
+  assert.equal(loopEntries([{ id: "a", rows: [] }], [], [], "mymac")[0].where, "mymac");
+  assert.equal(es[1].machine, "ska"); // machine itself unchanged: null here, the name there
+  assert.equal(es[0].machine, null);
+});
+
+test("machine: typing the machine name lists its loops", () => {
+  const keys = (q) => pickerRows(mk(), q).filter((r) => r.kind === "loop").map((r) => r.entry.key);
+  assert.deepEqual(keys("ska"), ["ska/plenary-ska"]);
+  assert.ok(entryMatch(mk()[1], "ska"));
+});
+
+test("splitMachine: @name is pulled out; a lone @ is no filter", () => {
+  assert.deepEqual(splitMachine("@ska plenary"), { machine: "ska", rest: "plenary" });
+  assert.deepEqual(splitMachine("plenary @SKA"), { machine: "ska", rest: "plenary" });
+  assert.deepEqual(splitMachine("@"), { machine: null, rest: "" });
+  assert.deepEqual(splitMachine("@ plenary"), { machine: null, rest: "plenary" });
+  assert.deepEqual(splitMachine(""), { machine: null, rest: "" });
+});
+
+test("@filter: keeps only that machine's loops, then the rest searches as usual", () => {
+  const keys = (q, es = mk()) => pickerRows(es, q).filter((r) => r.kind === "loop").map((r) => r.entry.key);
+  assert.deepEqual(keys("@ska"), ["ska/plenary-ska"]);
+  assert.deepEqual(keys("@ska plenary"), ["ska/plenary-ska"]);
+  assert.deepEqual(keys("@ska other"), []);
+  assert.deepEqual(keys("@here").sort(), ["idle-one", "plenary"]);
+  assert.deepEqual(keys("@local plenary"), ["plenary"]);
+  assert.deepEqual(keys("@this plenary"), ["plenary"]);
+  assert.deepEqual(keys("@nope"), []);
+  assert.equal(keys("@").length, 4); // no filter
+  const named = loopEntries([], [{ id: "x", goal: "" }], [], "mymac");
+  assert.deepEqual(keys("@mymac", named), ["x"]);
+  assert.ok(onMachine(named[0], "here") && !onMachine(named[0], "ska"));
+});
+
+test("@filter: the new-loop row carries only the words after the @token", () => {
+  const rows = pickerRows(mk(), "@ska zebra");
+  assert.deepEqual(rows.map((r) => r.kind), ["new"]);
+  assert.equal(rows[0].goal, "zebra");
 });

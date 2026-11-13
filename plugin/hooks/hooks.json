@@ -6,9 +6,11 @@
     ] }],
     "UserPromptSubmit": [{ "hooks": [
       { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/../bin/goal-hook.mjs\"", "timeout": 5 },
-      { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/../bin/session-hook.mjs\"", "timeout": 5 }
+      { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/../bin/session-hook.mjs\"", "timeout": 5 },
+      { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/../bin/ask-hook.mjs\"", "timeout": 5 }
     ] }],
-    "Stop": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/../bin/session-hook.mjs\"", "timeout": 5 }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/../bin/session-hook.mjs\"", "timeout": 5 },
+      { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/../bin/ask-hook.mjs\"", "timeout": 5 }] }],
     "PostToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/../bin/session-hook.mjs\"", "timeout": 5 }] }]
   }
 }

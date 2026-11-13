@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   loopKey,
-  buildLoops, route, alerts, newForYou, trackBlocked, loopView, qualify, ESCALATE_MS,
+  buildLoops, route, alerts, newForYou, trackBlocked, loopView, qualify, ESCALATE_MS, forYouKind, forYouCounts, forYouLabel,
 } from "../core/omniloop.js";
 
 const T = (address, status, labels = {}, created_ms = 0) => ({ address, status, labels, created_ms });
@@ -207,4 +207,33 @@ test("the app's terminals() shape: status is a word, kind is in report", () => {
   const ts = [T("t1", "working", loop("m2", { "omniloop.lead": "1" })),
     { ...T("t3", "blocked", loop("m2", { "omniloop.to": "t1" })), report: { state: "blocked", kind: "permission" } }];
   assert.equal(only(ts, "t3").why, "permission prompt");
+});
+
+test("for-you words: approval, asked, finished, stalled; counts first, joined with ' · '", () => {
+  const t = (status, extra = {}, labels = {}) => ({ address: "t1", status, labels, ...extra });
+  assert.equal(forYouKind({ kind: "blocked" }, t("blocked", { status: { state: "blocked", kind: "permission" } })), "approval");
+  assert.equal(forYouKind({ kind: "blocked" }, t("blocked", { status: { state: "blocked", kind: "auth" } })), "approval");
+  assert.equal(forYouKind({ kind: "blocked" }, t("blocked", { status: { state: "blocked", kind: "question" } })), "asked");
+  assert.equal(forYouKind({ kind: "done" }, t("done", {}, { "omniloop.ask": "1" })), "asked");
+  assert.equal(forYouKind({ kind: "done" }, t("done", {}, { "omniloop.ask": "" })), "finished");
+  assert.equal(forYouKind({ kind: "done" }, t("done")), "finished");
+  assert.equal(forYouKind({ kind: "done" }), "finished");
+  assert.equal(forYouKind({ kind: "stalled" }), "stalled");
+  assert.equal(forYouKind({ kind: "stuck" }), "stalled");
+  const c = forYouCounts(["approval", "asked", "asked", "finished", "bogus"]);
+  assert.deepEqual(c, { approval: 1, asked: 2, finished: 1, stalled: 0 });
+  assert.equal(forYouLabel(c), "1 needs approval · 2 asked you · 1 finished");
+  assert.equal(forYouLabel(forYouCounts([])), "");
+  assert.equal(forYouLabel(forYouCounts(["stalled"])), "1 stalled");
+});
+
+test("loopView carries forYouCounts and forYouLabel; needsYou unchanged", () => {
+  let ts = team().map((x) => ({ ...x, kind: undefined }));
+  ts = set(ts, "t1", "done", { "omniloop.ask": "1" });
+  ts = ts.map((x) => x.address === "t4" ? { ...x, status: { state: "blocked", kind: "permission" } } : x);
+  const built = buildLoops(ts);
+  const [l] = loopView(built, alerts(built));
+  assert.equal(l.needsYou, 2);
+  assert.deepEqual(l.forYouCounts, { approval: 1, asked: 1, finished: 0, stalled: 0 });
+  assert.equal(l.forYouLabel, "1 needs approval · 1 asked you");
 });

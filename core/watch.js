@@ -216,22 +216,16 @@ export function parseDuration(s) {
   return ((+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0)) * 1000;
 }
 
-/** Within this long after the watcher typed a note into an agent, its next turn is the watcher's doing. */
-export const OWN_SEND_MS = 15_000;
-
 /**
- * Did this change look like you interacting with the terminal? Two signals the watcher can see:
- * - Herdr marked its finished turn seen (`herdr.seen` label changed): you looked at it.
- * - An agent that reports to you started working from idle/done, and the watcher didn't just type into it:
- *   most likely you sent it a prompt. (A note another agent sends looks the same; this is a heuristic.)
- * prev, next: the terminal before and after the event. sentAt: when the watcher last typed into it, or null.
+ * Did this change look like you interacting with the terminal? One signal: the `omniloop.you` label changed to a
+ * value. bin/ask-hook.mjs (UserPromptSubmit) sets it, to the time, only when a person typed the prompt (not another
+ * agent's note or message). Status changes and herdr.seen say nothing reliable about who prompted.
+ * prev, next: the terminal before and after the event.
  */
-export function touchedByYou(prev, next, { reportsToYou = false, sentAt = null, now = 0 } = {}) {
+export function touchedByYou(prev, next) {
   if (!prev || !next) return false;
-  const seen = (t) => t.labels?.["herdr.seen"] ?? null;
-  if (seen(next) != null && seen(next) !== seen(prev)) return true;
-  const was = statusOf(prev), is = statusOf(next);
-  return reportsToYou && is === "working" && (was === "idle" || was === "done") && !(sentAt != null && now - sentAt < OWN_SEND_MS);
+  const you = (t) => t.labels?.[LABEL.you] ?? "";
+  return you(next) !== "" && you(next) !== you(prev);
 }
 
 /**

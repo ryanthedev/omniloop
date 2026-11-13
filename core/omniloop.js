@@ -21,6 +21,8 @@ export const LABEL = {
   needs: "omniloop.needs",
   reportsTo: "omniloop.to",
   retired: "omniloop.retired",
+  ask: "omniloop.ask",
+  you: "omniloop.you",
 };
 
 /** Blocks a parent agent can't clear (it can't approve a prompt in another terminal): they go to you. */
@@ -224,6 +226,33 @@ export function trackBlocked(prev, terminals, now) {
   return next;
 }
 
+/** The words for what is for you, in the order they are listed. */
+export const FOR_YOU_WORDS = { approval: "needs approval", asked: "asked you", finished: "finished", stalled: "stalled" };
+
+/**
+ * Which word an alert for you gets: "approval" (blocked on a permission or auth prompt: the agent can't continue),
+ * "asked" (blocked with herdr kind "question", or finished its turn with a question: its Stop hook set
+ * omniloop.ask), "finished" (finished its turn, nothing asked), "stalled" (watcher-only: stalled, or stuck at start).
+ * t: the alert's terminal (for its labels), when known.
+ */
+export function forYouKind(a, t = null) {
+  if (a.kind === "stalled" || a.kind === "stuck") return "stalled";
+  if (a.kind === "blocked") return kindOf(t) === "question" ? "asked" : "approval";
+  return isOn(t?.labels?.[LABEL.ask]) ? "asked" : "finished";
+}
+
+/** Counts per word from a list of kinds: { approval, asked, finished, stalled }. */
+export function forYouCounts(kinds = []) {
+  const c = { approval: 0, asked: 0, finished: 0, stalled: 0 };
+  for (const k of kinds) if (k in c) c[k]++;
+  return c;
+}
+
+/** "1 needs approval · 2 asked you": counts first, joined with " · "; "" when nothing is for you. */
+export function forYouLabel(counts) {
+  return Object.entries(FOR_YOU_WORDS).filter(([k]) => counts?.[k] > 0).map(([k, w]) => `${counts[k]} ${w}`).join(" · ");
+}
+
 /**
  * The view: loops ordered by what needs you, each with its status for you.
  * Returns [{ id, goal, lead, needsYou (count), handling (count of blocks the loop is handling
@@ -232,11 +261,15 @@ export function trackBlocked(prev, terminals, now) {
 export function loopView(built, routed) {
   const rows = built.loops.map((loop) => {
     const mine = routed.filter((a) => a.loop === loop.id);
+    const term = new Map(loop.members.map((m) => [m.address, m.terminal]));
+    const forYouCount = forYouCounts(mine.filter((a) => a.to === "you").map((a) => forYouKind(a, term.get(a.address))));
     const status = loop.members.reduce((best, m) =>
       (URGENCY[m.status] ?? 0) > (URGENCY[best] ?? 0) ? m.status : best, null);
     return {
       ...loop,
       needsYou: mine.filter((a) => a.to === "you").length,
+      forYouCounts: forYouCount,
+      forYouLabel: forYouLabel(forYouCount),
       handling: mine.filter((a) => a.to !== "you" && a.kind === "blocked").length,
       status,
     };

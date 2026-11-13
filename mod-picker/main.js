@@ -17,7 +17,7 @@ import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { terminals, theme, run, exec, home, readTextFile, props, closeOverlay, shared, setShared, notify, nextCommand } from "herdr";
 import { buildView, ago } from "./core/view.js";
-import { folderRows, projectRows, machineRows, newLoopCommand, leadAddress, clampAt, loopEntries, pickerRows, suggestLoops } from "./core/picker.js";
+import { folderRows, projectRows, machineRows, newLoopCommand, leadAddress, clampAt, loopEntries, pickerRows, suggestLoops, LOCAL_NAME } from "./core/picker.js";
 import { matchProjects, strongMatches } from "./core/projects.js";
 import { PINS_KEY, sanitizePins, togglePin, movePin } from "./core/pins.js";
 import { cleanId, fallbackProposal } from "./core/intake.js";
@@ -53,6 +53,7 @@ export default class OmniloopPicker extends View {
     this.folders = [];
     this.projects = [];
     this.pickedProjects = [];
+    this.localName = LOCAL_NAME; // this computer's name, shown on its loops
     this.machines = [];
     this.machine = null;        // where the new loop goes: null = this computer
     this.error = null;
@@ -71,6 +72,11 @@ export default class OmniloopPicker extends View {
     cx.spawn(async (cx) => {
       const raw = await readTextFile(`${home()}/.cache/omniloop/state.json`).catch(() => null);
       try { this.watcher = raw ? JSON.parse(raw) : null; } catch {}
+      // This computer's own name, read here and shown only here (hc has no name for the machine it runs on).
+      try {
+        const n = ((await exec("/bin/hostname", ["-s"], { timeout: 3000 })).stdout ?? "").trim().toLowerCase();
+        if (/^[a-z0-9][a-z0-9._-]*$/.test(n)) { this.localName = n; cx.notify(); }
+      } catch {}
       try {
         const r = await exec(this.hc(), ["machine", "ls", "--json"], { timeout: 10000 });
         this.machines = (JSON.parse(r.stdout || "{}").machines ?? []).filter((m) => m.state === "connected").map((m) => m.name);
@@ -102,7 +108,7 @@ export default class OmniloopPicker extends View {
   pins() { return sanitizePins(shared(PINS_KEY)); }
 
   view() { return buildView(terminals(), this.watcher, Date.now(), shared("omniloop.withYou") ?? {}); }
-  entries() { return loopEntries(this.view().loops, this.index, this.pins()); }
+  entries() { return loopEntries(this.view().loops, this.index, this.pins(), this.localName); }
 
   // ---- loops ----
 
@@ -127,7 +133,7 @@ export default class OmniloopPicker extends View {
   /** Jump to pin `slot`'s lead and close (the popup the leader opens). */
   jumpTo(slot) {
     const key = this.pins()[slot - 1];
-    const entry = key ? loopEntries(buildView(terminals(), null, Date.now()).loops, [], this.pins()).find((e) => e.key === key) : null;
+    const entry = key ? loopEntries(buildView(terminals(), null, Date.now()).loops, [], this.pins(), this.localName).find((e) => e.key === key) : null;
     this.close();
     if (!key) return notify({ title: "Omniloop", body: `No loop pinned at ${slot}`, level: "warning", timeout: 1800 });
     if (!entry?.lead) return notify({ title: "Omniloop", body: `${slot} · ${key}: nobody is running in it`, level: "warning", timeout: 2500 });
@@ -387,8 +393,8 @@ export default class OmniloopPicker extends View {
       .child(v_flex().flex_1().min_w(0).gap(2)
         .child(h_flex().gap(8).items_center()
           .child(div().text_size(15).font_semibold().text_color(e.running ? t.foreground : t.muted).child(e.id))
-          .when(Boolean(e.machine), (el) => el.child(this.chip(t, e.machine, t.dim)))
-          .when(e.needsYou > 0, (el) => el.child(this.chip(t, `${e.needsYou} for you`, t.blocked))))
+          .child(this.chip(t, e.where ?? e.machine ?? this.localName, t.dim))
+          .when(e.needsYou > 0, (el) => el.child(this.chip(t, e.forYouLabel || `${e.needsYou} for you`, t.blocked))))
         .child(div().text_size(12.5).text_color(r.why ? t.accent : t.muted).truncate().child(r.why ?? e.goal ?? "")))
       .child(v_flex().flex_none().items_end().gap(2)
         .child(div().text_size(11.5).text_color(e.ago ? t.muted : t.dim).child(when))

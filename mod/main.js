@@ -186,7 +186,7 @@ export default class Omniloop extends View {
       .child(div().flex_1().truncate().text_color(r.forYou ? t.foreground : t.muted).child(`${r.isLead ? "★ " : ""}${r.name}`))
       .when(Boolean(r.kind), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(r.kind)))
       .when(r.reportsToYou, (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(r.ago ? `you ${r.ago}` : "you: never")))
-      .when(Boolean(r.forYou), (el) => el.child(this.chip(t, r.forYou, t.blocked)));
+      .when(Boolean(r.forYou), (el) => el.child(this.chip(t, r.forYouLabel ?? r.forYou, t.blocked)));
   }
 
   loop(t, l) {
@@ -203,7 +203,7 @@ export default class Omniloop extends View {
         .text_color(this.chatId === l.id ? t.background : t.accent).flex().items_center().child("chat")
         .on_click((_e, cx) => { cx.stop_propagation(); this.selectChat(l.id, cx); })))
       .child(div().flex_none().text_size(10.5).text_color(l.ago ? t.muted : t.dim).child(l.ago ? `you ${l.ago}` : "you: never"))
-      .when(l.needsYou > 0, (el) => el.child(this.chip(t, `${l.needsYou} for you`, t.blocked)))
+      .when(l.needsYou > 0, (el) => el.child(this.chip(t, l.forYouLabel || `${l.needsYou} for you`, t.blocked)))
       .when(l.handling > 0, (el) => el.child(this.chip(t, `${l.handling} handled in loop`, t.working)))
       .when(!l.lead, (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child("you lead")));
     const warn = l.warnings.length ? div().px(22).text_size(10.5).text_color(t.blocked).child(l.warnings.join("; ")) : null;

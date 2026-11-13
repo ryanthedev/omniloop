@@ -882,8 +882,7 @@ async function cmdWatch({ flags }) {
       cur.event_ms = now;
       // When you last interacted with a loop member (shown and ranked by the view).
       if (cur.labels?.[LABEL.loop] && (p.type === "status" || p.type === "labels")) {
-        const m = buildLoops([...terms.values()]).loops.flatMap((l) => l.members).find((x) => x.address === p.terminal);
-        if (touchedByYou(before, cur, { reportsToYou: Boolean(m?.reportsToYou), sentAt: sentAt[p.terminal] ?? null, now })) {
+        if (touchedByYou(before, cur)) {
           withYou[p.terminal] = now;
           soon();
         }

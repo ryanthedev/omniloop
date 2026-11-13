@@ -134,6 +134,10 @@ export function leadAddress(stdout, machine = null) {
 
 // ---- every loop, searched (the ⌘O list) ---------------------------------------------------------------------
 
+/** What a loop on this computer shows as its machine when the computer's own name isn't known. */
+export const LOCAL_NAME = "this mac";
+const HERE = ["here", "local"];
+
 const baseName = (p) => String(p ?? "").split("/").filter(Boolean).pop() ?? "";
 
 /**
@@ -142,22 +146,22 @@ const baseName = (p) => String(p ?? "").split("/").filter(Boolean).pop() ?? "";
  * so a loop with nobody running still shows and can be searched. Entry:
  * { key, id, machine, goal, lead, needsYou, status, ago, lastWithYou, touched, running, members, dirs, projects, tasks, feed, pin }
  */
-export function loopEntries(viewLoops = [], index = [], pins = []) {
+export function loopEntries(viewLoops = [], index = [], pins = [], local = LOCAL_NAME) {
   const byId = new Map(index.map((x) => [x.id, x]));
   const out = [];
   for (const l of viewLoops) {
     const i = l.id.indexOf("/");
     const machine = i < 0 ? null : l.id.slice(0, i);
     const disk = machine ? null : byId.get(l.id);
-    out.push({ key: l.id, id: machine ? l.id.slice(i + 1) : l.id, machine, goal: l.goal ?? disk?.goal ?? "", lead: l.lead ?? l.rows?.[0]?.address ?? null,
-      needsYou: l.needsYou ?? 0, status: l.status ?? null, ago: l.ago ?? null, lastWithYou: l.lastWithYou ?? null, touched: disk?.touched ?? null,
+    out.push({ key: l.id, where: machine ?? local, id: machine ? l.id.slice(i + 1) : l.id, machine, goal: l.goal ?? disk?.goal ?? "", lead: l.lead ?? l.rows?.[0]?.address ?? null,
+      needsYou: l.needsYou ?? 0, forYouLabel: l.forYouLabel ?? (l.needsYou ? `${l.needsYou} for you` : ""), status: l.status ?? null, ago: l.ago ?? null, lastWithYou: l.lastWithYou ?? null, touched: disk?.touched ?? null,
       running: true, members: (l.rows ?? []).map((r) => r.name).filter(Boolean), dirs: disk?.dirs ?? [], projects: disk?.projects ?? [],
       tasks: disk?.tasks ?? [], feed: disk?.feed ?? [], pin: slotOf(pins, l.id) });
   }
   const seen = new Set(out.map((e) => e.key));
   for (const x of index) {
     if (seen.has(x.id)) continue;
-    out.push({ key: x.id, id: x.id, machine: null, goal: x.goal ?? "", lead: null, needsYou: 0, status: null, ago: null, lastWithYou: null,
+    out.push({ key: x.id, where: local, id: x.id, machine: null, goal: x.goal ?? "", lead: null, needsYou: 0, forYouLabel: "", status: null, ago: null, lastWithYou: null,
       touched: x.touched ?? null, running: false, members: [], dirs: x.dirs ?? [], projects: x.projects ?? [], tasks: x.tasks ?? [], feed: x.feed ?? [],
       pin: slotOf(pins, x.id) });
   }
@@ -169,13 +173,31 @@ const FIELD_LABEL = { member: "session", folder: "folder", project: "project", t
 /** How an entry matches a query: { score, why } or null. `why` is one short line, only when the hit isn't in the id or goal. */
 export function entryMatch(e, query) {
   const m = fuzzyFields(query, [
-    { name: "id", text: e.id, weight: 3 }, { name: "goal", text: e.goal, weight: 2, long: true },
+    { name: "id", text: e.id, weight: 3 }, { name: "machine", text: e.where ?? e.machine ?? "", weight: 1.2 }, { name: "goal", text: e.goal, weight: 2, long: true },
     { name: "member", text: e.members, weight: 1.2 }, { name: "folder", text: e.dirs.map(baseName), weight: 1.5 },
     { name: "project", text: e.projects, weight: 1.5 }, { name: "task", text: e.tasks, long: true }, { name: "chat", text: e.feed, weight: 0.8, long: true },
   ]);
   if (!m) return null;
   const why = FIELD_LABEL[m.field] ? `${FIELD_LABEL[m.field]}: ${snippet(m.text, query, 56)}` : null;
   return { score: m.score, why };
+}
+
+/**
+ * A query's "@machine" token, apart from the rest: "@ska plenary" -> { machine: "ska", rest: "plenary" }. A lone "@"
+ * is no filter. Only the first @token counts; any others stay in the rest.
+ */
+export function splitMachine(query) {
+  const ws = String(query ?? "").trim().split(/\s+/).filter(Boolean);
+  const i = ws.findIndex((w) => w.length > 1 && w[0] === "@");
+  if (i < 0) return { machine: null, rest: ws.filter((w) => w !== "@").join(" ") };
+  return { machine: ws[i].slice(1).toLowerCase(), rest: ws.filter((w, j) => j !== i && w !== "@").join(" ") };
+}
+
+/** Is this entry on the machine a query named? Another machine's by its name; this computer's by its name, "here" or "local". */
+export function onMachine(e, name) {
+  if (!name) return true;
+  const names = e.machine ? [e.machine] : [e.where ?? LOCAL_NAME, ...HERE];
+  return names.some((n) => String(n).toLowerCase().startsWith(name));
 }
 
 const recency = (a, b) => (b.lastWithYou ?? -1) - (a.lastWithYou ?? -1) || (b.touched ?? -1) - (a.touched ?? -1) || a.key.localeCompare(b.key);
@@ -187,7 +209,8 @@ const pinOrder = (a, b) => (a.pin ?? 99) - (b.pin ?? 99);
  * `why`. Rows: { kind: "loop", entry, why } then { kind: "new", id, goal } (first and alone when nothing matches).
  */
 export function pickerRows(entries, query, takenIds = entries.filter((e) => !e.machine).map((e) => e.id)) {
-  const q = String(query ?? "").trim();
+  const { machine, rest: q } = splitMachine(query);
+  entries = entries.filter((e) => onMachine(e, machine));
   let found;
   if (!q) found = [...entries].sort((a, b) => pinOrder(a, b) || recency(a, b)).map((entry) => ({ kind: "loop", entry, why: null }));
   else found = entries.map((entry) => ({ entry, m: entryMatch(entry, q) })).filter((x) => x.m)

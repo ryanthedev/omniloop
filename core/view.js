@@ -1,6 +1,6 @@
 // view.js: what the omniloop pane shows, as plain data. Pure; the mod only draws it.
 
-import { buildLoops, alerts, loopView, LABEL } from "./omniloop.js";
+import { buildLoops, alerts, loopView, forYouKind, FOR_YOU_WORDS, LABEL } from "./omniloop.js";
 
 /** The watcher counts as running when its state file was written this recently (it ticks every 15 s). */
 export const WATCHER_FRESH_MS = 45_000;
@@ -40,6 +40,8 @@ export function buildView(terminals, watcher, now, withYou = {}) {
   const all = [...routed, ...extra];
   const why = new Map(all.filter((a) => a.to === "you").map((a) => [a.address, a.kind === "stalled" ? "stalled" : a.kind === "stuck" ? "stuck at start (folder trust?)" : a.why]));
 
+  const termOf = new Map(built.loops.flatMap((l) => l.members.map((m) => [m.address, m.terminal])));
+  const word = new Map(all.filter((a) => a.to === "you").map((a) => [a.address, FOR_YOU_WORDS[forYouKind(a, termOf.get(a.address))]]));
   const lastOf = (a) => Math.max(withYou[a] ?? -Infinity, watcher?.withYou?.[a] ?? -Infinity);
   const known = (x) => (x === -Infinity ? null : x);
 
@@ -49,7 +51,7 @@ export function buildView(terminals, watcher, now, withYou = {}) {
     const walk = (a, depth) => {
       const m = by.get(a);
       const last = known(lastOf(a));
-      rows.push({ address: a, depth, status: m.status, kind: m.kind, name: nameOf(m.terminal), isLead: m.isLead, forYou: why.get(a) ?? null,
+      rows.push({ address: a, depth, status: m.status, kind: m.kind, name: nameOf(m.terminal), isLead: m.isLead, forYou: why.get(a) ?? null, forYouLabel: word.get(a) ?? null,
         reportsToYou: m.reportsToYou, lastWithYou: m.reportsToYou ? last : null, ago: m.reportsToYou ? ago(last, now) : null });
       for (const c of m.children) walk(c, depth + 1);
     };
@@ -57,7 +59,7 @@ export function buildView(terminals, watcher, now, withYou = {}) {
     for (const r of l.roots) walk(r, r === l.lead || !l.lead ? 0 : 1);
     // The loop's last time with you: any member you interacted with.
     const last = known(Math.max(...l.members.map((m) => lastOf(m.address))));
-    return { id: l.id, goal: l.goal, lead: l.lead, needsYou: l.needsYou, handling: l.handling, status: l.status, warnings: l.warnings, rows,
+    return { id: l.id, goal: l.goal, lead: l.lead, needsYou: l.needsYou, forYouCounts: l.forYouCounts, forYouLabel: l.forYouLabel, handling: l.handling, status: l.status, warnings: l.warnings, rows,
       lastWithYou: last, ago: ago(last, now) };
   });
   // Most recently with you first; loops you never touched last, those that need you first among them.
@@ -118,7 +120,7 @@ export function whoIs(terminals, address, { watcher = null, withYou = {}, now = 
   const pt = parent && terminals.find((x) => x.address === parent);
   return { ...base, loop: l.id, goal: l.goal, lead: l.lead, isLead: row.isLead, parent,
     parentName: pt ? pt.labels?.["omniloop.job"] || cleanTitle(pt.title) || parent : null,
-    reportsToYou: row.reportsToYou, forYou: row.forYou, ago: l.ago, needsYou: l.needsYou, size: l.rows.length };
+    reportsToYou: row.reportsToYou, forYou: row.forYou, forYouLabel: row.forYouLabel, ago: l.ago, needsYou: l.needsYou, forYouCounts: l.forYouCounts, loopForYouLabel: l.forYouLabel, size: l.rows.length };
 }
 
 /** Terminal titles: drop a leading spinner or symbol, and shell prompts like "user@host:~/x". */

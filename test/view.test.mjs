@@ -75,3 +75,10 @@ test("whoIs: id, agent name, loop, parent", async () => {
   assert.equal(cleanTitle("✳ Fix login"), "Fix login");
   assert.equal(cleanTitle("user@host:~/repos/x"), null);
 });
+
+test("view rows carry a forYouLabel word; loops carry counts", () => {
+  const v = buildView([T("t1", "done", { omniloop: "q", "omniloop.lead": "1", "omniloop.ask": "1" })], null, 0);
+  assert.equal(v.loops[0].rows[0].forYouLabel, "asked you");
+  assert.equal(v.loops[0].forYouLabel, "1 asked you");
+  assert.equal(v.loops[0].rows[0].forYou, "the lead"); // forYou keeps meaning why
+});

@@ -41,7 +41,7 @@ export default class LoopStatus extends View {
       .child(dot()).child(me)
       .child(dot()).child(part(who.isLead ? "you lead it" : who.parent ? `reports to ${who.parent} ${who.parentName ?? ""}`.trim() : who.lead ? `reports to ${who.lead} (lead)` : "reports to you"))
       .child(dot()).child(part(`lead: ${who.lead ?? "you"}`))
-      .when(who.needsYou > 0, (el) => el.child(dot()).child(part(`${who.needsYou} for you`, t.blocked)))
+      .when(who.needsYou > 0, (el) => el.child(dot()).child(part(who.loopForYouLabel || `${who.needsYou} for you`, t.blocked)))
       .child(dot()).child(part(`${who.size} session${who.size === 1 ? "" : "s"}`, t.dim));
   }
 }

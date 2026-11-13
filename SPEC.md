@@ -51,6 +51,8 @@ helper can start its own.
 | `omniloop.to=<terminal>` | Its parent: who gets its blocks and results. A remote terminal may omit its own machine. |
 | `omniloop.job=<text>` | What it's doing, for the view. |
 | `omniloop.notify=me` | This member may reach you directly. |
+| `omniloop.ask=1` | Set by `bin/ask-hook.mjs` (Stop hook) when the agent's last message asks the user something; cleared at the next prompt. |
+| `omniloop.you=<ms>` | Set by `bin/ask-hook.mjs` (UserPromptSubmit hook) when a person typed the prompt: the time of it. |
 | `omniloop.needs=you` | Set by the agent itself (`omniloop needs-you`): this block is yours. |
 | `omniloop.retired=<t>` | Handed off to `<t>` (`omniloop handoff`); out of the loop. |
 
@@ -101,15 +103,34 @@ Each loop shows when you last interacted with it ("you 5m"), and the view ranks 
 (loops you never touched last). Agents that **report to you** (the lead, every member of a loop you lead,
 `omniloop.notify=me`) show their own time; other members don't, since they report to an agent.
 
-herdr-core records no "last key a person pressed", so "interacted" means any of:
+herdr-core records no "last key a person pressed", so "interacted" means either of:
 
 - **Focus:** you were in its terminal (the view records it, every 15 s at most, kept in the mod's storage).
-- **Seen:** Herdr marked its finished turn seen (`herdr.seen` label changed; the watcher records it).
-- **Prompted:** an agent that reports to you went from idle or done to working, and the watcher hadn't typed
-  into it in the last 15 s (`OWN_SEND_MS`). A heuristic: a note another agent sends looks the same.
+- **Prompted:** you typed a prompt into it. The UserPromptSubmit hook (`bin/ask-hook.mjs`, shipped in `plugin/hooks`)
+  sets the label `omniloop.you=<ms>` on the terminal it runs in, unless the prompt is empty or another agent's
+  message (starts with `<hc from=`, `<cross-session-message` or "Another Claude session sent a message"). The
+  watcher records the time when that label changes (`touchedByYou` in `core/watch.js`).
+
+Status changes (an agent going idle/done to working) and `herdr.seen` are **not** signals: agents message each
+other directly, and each such message looked like you. A member without the plugin's hook shows no time from you
+except by focus.
 
 The watcher keeps its record in `state.json` (`withYou`, entries older than 30 days dropped); the view takes
 the newer of the two.
+
+## What is for you, in words
+
+Not colours. A row, a loop and the status bar say what is waiting, counts first, joined with " · "
+(`forYouLabel(counts)` in `core/omniloop.js`; per loop `forYouCounts` = `{ approval, asked, finished, stalled }`):
+
+| Word | When |
+|---|---|
+| `needs approval` | blocked on a permission or auth prompt (any other block for you too): the agent can't continue |
+| `asked you` | finished its turn with a question (`omniloop.ask=1`, from the Stop hook: last lines end with "?", or a "What you need to do" line), or blocked with herdr kind `question` |
+| `finished` | finished its turn, nothing asked |
+| `stalled` | watcher-only: no progress for 20 min, or stuck at start |
+
+e.g. "1 needs approval · 2 asked you". `needsYou` stays the plain count.
 
 ## The view (Herdr mod)
 

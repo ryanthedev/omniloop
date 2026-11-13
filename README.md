@@ -42,7 +42,7 @@ one, `goal done N` closes one, never the last. `new` refuses a loop without one.
 
 - **You see it:** as a paragraph under each loop's name in the Omniloop pane.
 - **Agents get it:** at start from the loop's CLAUDE.md (between `<!-- omniloop:goal -->` markers). On a change,
-  members started by omniloop load `plugin/` (a Claude Code plugin), whose hook (`bin/goal-hook.mjs`) adds one
+  members started by omniloop load `plugin/` (a Claude Code plugin), whose hooks (`bin/goal-hook.mjs`; `bin/ask-hook.mjs` labels what you asked and when you typed) adds one
   line to their next prompt, and again after a compact or resume; an unchanged goal adds nothing. Members started
   some other way get the line typed in, if they're waiting.
 
