@@ -23,6 +23,12 @@ export function newManifest({ id, goal = null, dirs = [], now = 0 }) {
   return { id, goal, dirs: dirs.map((d) => (typeof d === "string" ? { path: d, machine: null } : d)), created_ms: now };
 }
 
+/** Remove a context folder (every machine's entry for that path, or just `machine`'s). Returns a new manifest; the same one when absent. */
+export function removeDir(manifest, path, machine = undefined) {
+  const keep = manifest.dirs.filter((d) => !(d.path === path && (machine === undefined || (d.machine ?? null) === machine)));
+  return keep.length === manifest.dirs.length ? manifest : { ...manifest, dirs: keep };
+}
+
 /** Add a folder once (same path and machine). Returns a new manifest. */
 export function addDir(manifest, path, machine = null) {
   if (manifest.dirs.some((d) => d.path === path && (d.machine ?? null) === machine)) return manifest;
@@ -127,6 +133,30 @@ export function sharedWith(manifests, id) {
   return out;
 }
 
+function memoryBlock(manifest) {
+  return `## Memory (Engram)
+
+Your Engram rules are in your global instructions; in this loop also:
+
+- **Recall by loop:** start with \`engram search "${manifest.id} <topic>"\`, then the repo or problem. Hits are leads; check them.
+- **Tag what you write:** \`engram ingest --event-id ${manifest.id}-<topic>-<date> --source "loop ${manifest.id}" --text "…"\`,
+  so the next member of this loop finds it. Only verified results, as always.
+- **Decisions belong here too:** the lead copies loop decisions into the Decisions section below.
+
+`;
+}
+
+// A temporary loop: nothing it does is remembered (core/lifecycle.js).
+const TEMP_MEMORY = `## Temporary loop: no memory
+
+This loop is temporary. When the user says they're done, run \`omniloop rm\`: it deletes this folder, the
+sessions' transcripts and their prompt history. It also ends by itself once its last member is gone.
+
+- **Never write memory:** no \`engram ingest\`, no memory files, no notes outside this folder. Engram is off here.
+- **Code still lands normally:** commits in a context folder are the user's work, not memory; finish or say what's left.
+
+`;
+
 /** The loop's CLAUDE.md, first time. Everything outside the context block is the loop's to edit. */
 export function claudeMd(manifest) {
   return `# Loop: ${manifest.id}
@@ -137,16 +167,7 @@ You are a member of the omniloop \`${manifest.id}\`. Run \`omniloop brief\` once
 
 ${contextBlock(manifest)}
 
-## Memory (Engram)
-
-Your Engram rules are in your global instructions; in this loop also:
-
-- **Recall by loop:** start with \`engram search "${manifest.id} <topic>"\`, then the repo or problem. Hits are leads; check them.
-- **Tag what you write:** \`engram ingest --event-id ${manifest.id}-<topic>-<date> --source "loop ${manifest.id}" --text "…"\`,
-  so the next member of this loop finds it. Only verified results, as always.
-- **Decisions belong here too:** the lead copies loop decisions into the Decisions section below.
-
-## Tools
+${manifest.temp ? TEMP_MEMORY : memoryBlock(manifest)}## Tools
 
 | Tool | Use it for |
 |---|---|
@@ -160,8 +181,7 @@ Your Engram rules are in your global instructions; in this loop also:
 | \`omniloop handoff <file>\` | at about 60% context: write \`<file>\`, run this, stop |
 | \`omniloop send <t> "<text>"\` | message a helper, your lead or another session; it arrives labelled as you, never as the user (MCP: \`send_message\`) |
 | \`hc read <t>\` | see a helper's screen |
-| \`engram search\` / \`engram ingest\` | the shared memory (above) |
-
+${manifest.temp ? "" : "| `engram search` / `engram ingest` | the shared memory (above) |\n"}
 ## Decisions
 
 (The lead records decisions here, with the date and why.)
@@ -183,13 +203,16 @@ export function updateClaudeMd(text, manifest) {
 // The task goes right after the program: --add-dir takes a list, so a task after it would be read as a folder.
 // binDir: put on PATH so members can run `omniloop`.
 // pluginDirs: the loop's projects, each loaded as a Claude Code plugin (its skills and tools).
-export function memberArgv({ shell = "/bin/sh", claudeArgv = ["claude"], dirs = [], task = null, binDir = null, pluginDirs = [] }) {
+// noMemory: a temporary loop's member: these env vars unset and these tools disallowed (core/lifecycle.js).
+export function memberArgv({ shell = "/bin/sh", claudeArgv = ["claude"], dirs = [], task = null, binDir = null, pluginDirs = [], noMemory = null }) {
   const [prog, ...flags] = claudeArgv;
   const argv = [prog, ...(task ? [task] : []), ...flags];
   for (const p of pluginDirs) argv.push("--plugin-dir", p);
+  if (noMemory?.tools?.length) argv.push("--disallowedTools", ...noMemory.tools);
   if (dirs.length) argv.push("--add-dir", ...dirs);
   const path = binDir ? `export PATH=${shq(binDir)}:"$PATH"; ` : "";
-  return [shell, "-lc", `${path}export ${ADD_DIR_ENV}=1; exec "$@"`, "omniloop", ...argv];
+  const unset = noMemory?.env?.length ? `unset ${noMemory.env.join(" ")}; ` : "";
+  return [shell, "-lc", `${path}${unset}export ${ADD_DIR_ENV}=1; exec "$@"`, "omniloop", ...argv];
 }
 
 /** Quote for sh. */

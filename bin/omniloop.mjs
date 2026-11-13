@@ -4,7 +4,7 @@
 
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, readFile, writeFile, readdir, rm, rename, open, stat, mkdtemp, realpath } from "node:fs/promises";
+import { mkdir, readFile, writeFile, readdir, rm, rename, open, stat, lstat, mkdtemp, realpath, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createInterface } from "node:readline";
 import { homedir } from "node:os";
@@ -12,14 +12,15 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LABEL, buildLoops, statusOf } from "../core/omniloop.js";
 import { initState, step, parseDuration, touchedByYou, sendFailed, hold, withoutReplies } from "../core/watch.js";
-import { validId, loopHome, newManifest, addDir, dirsOn, launchDirsOn, worktreeChoice, worktreeTarget, worktreeBranch, setWorktree, overlaps, claudeMd, updateClaudeMd, memberArgv, parseAliasWords, sharedWith, LOOPS_DIR } from "../core/loopdir.js";
-import { matchProjects, addProject, projectLaunch, withProjectsBlock } from "../core/projects.js";
-import { goalsOf, openGoals, setGoal, addGoal, finishGoal, withGoalBlock, goalNote } from "../core/goals.js";
+import { validId, loopHome, newManifest, addDir, removeDir, dirsOn, launchDirsOn, worktreeChoice, worktreeTarget, worktreeBranch, setWorktree, overlaps, claudeMd, updateClaudeMd, memberArgv, parseAliasWords, sharedWith, LOOPS_DIR } from "../core/loopdir.js";
+import { matchProjects, addProject, removeProject, projectLaunch, withProjectsBlock } from "../core/projects.js";
+import { goalsOf, openGoals, setGoal, addGoal, finishGoal, editGoal, withGoalBlock, goalNote } from "../core/goals.js";
 import { feedEntry, feedLine, parseFeed, replyPlan, FEED_FILE } from "../core/feed.js";
 import { proposeArgs, checkProposal, fallbackProposal, identityTerms } from "../core/intake.js";
 import { userInfo, hostname } from "node:os";
 import { deliver, liveSessions, hookRecords, turnRecord, foregroundPid } from "./lib/sock.mjs";
-import { YOU, addTask, finishTask, giveTask, openTasks, taskLines, taskNote, tasksOf } from "../core/tasks.js";
+import { YOU, addTask, finishTask, giveTask, editTask, reopenTask, removeTask, openTasks, taskLines, taskNote, tasksOf } from "../core/tasks.js";
+import { claudeProjectKey, isLoopClaudeEntry, renamedManifest, renameText, withFormerlyNote, removeCheck, endedTempLoops, tempId, scrubHistory, NO_MEMORY_ENV, NO_MEMORY_TOOLS } from "../core/lifecycle.js";
 
 const run = promisify(execFile);
 const HOME = process.env.OMNILOOP_HOME ?? join(homedir(), ".cache", "omniloop");
@@ -91,12 +92,12 @@ async function loadProjects() {
 const PLUGIN = join(BIN, "..", "plugin");
 
 async function launchOf(manifest) {
-  if (!manifest) return { dirs: [], pluginDirs: [] };
+  if (!manifest) return { dirs: [], pluginDirs: [], noMemory: null };
   const { pluginDirs, dirs, missing } = projectLaunch(manifest, await loadProjects());
   if (missing.length) console.error(`omniloop: loop ${manifest.id} lists missing project(s): ${missing.join(", ")}`);
   const all = launchDirsOn(manifest);
   for (const d of dirs) if (!all.includes(d)) all.push(d);
-  return { dirs: all, pluginDirs: [PLUGIN, ...pluginDirs] };
+  return { dirs: all, pluginDirs: [PLUGIN, ...pluginDirs], noMemory: manifest.temp ? { env: NO_MEMORY_ENV, tools: NO_MEMORY_TOOLS } : null };
 }
 
 /** CLAUDE.md for a loop, with its projects' CONTEXT.md in the projects block. */
@@ -130,7 +131,7 @@ function splitTask(argv) {
 function die(msg) { console.error(`omniloop: ${msg}`); process.exit(1); }
 
 // Flags that never take a value, so `--json some text` keeps the text.
-const BOOL = new Set(["json", "dry-run", "lead", "no-lead"]);
+const BOOL = new Set(["json", "dry-run", "lead", "no-lead", "temp", "force", "purge", "auto"]);
 function parseArgs(argv) {
   const flags = {}, rest = [];
   for (let i = 0; i < argv.length; i++) {
@@ -333,14 +334,18 @@ async function isolateDirs(id, manifest, { dry = false, only = null } = {}) {
 }
 
 async function cmdNew({ flags, rest }) {
-  const id = rest[0];
-  if (!validId(id)) die("usage: omniloop new <id> [--goal G] [--dir D]... [--project P]... [--task T] [--no-lead]   (id: a-z 0-9 - _)");
+  const temp = Boolean(flags.temp);
+  const id = rest[0] ?? (temp ? tempId(Date.now(), (await allManifests()).map((m) => m.id)) : null);
+  if (!validId(id)) die("usage: omniloop new <id> [--goal G] [--dir D]... [--project P]... [--task T] [--no-lead] [--temp]   (id: a-z 0-9 - _; --temp: no id needed)");
   const home = loopHome(homedir(), id);
+  await dropAlias(id);
   if (await manifestOf(id)) die(`loop ${id} already exists: ${home}`);
+  if (temp && typeof flags.goal !== "string") flags.goal = "A temporary loop: do what the user asks, then it deletes itself.";
   const dirs = [];
   for (let i = 0; i < argvRaw.length; i++) if (argvRaw[i] === "--dir" && argvRaw[i + 1]) dirs.push(resolvePath(argvRaw[++i]));
   if (typeof flags.goal !== "string" || !flags.goal.trim()) die("every loop needs a goal: omniloop new <id> --goal \"what this loop is for\"");
   let manifest = newManifest({ id, goal: flags.goal.replace(/\s+/g, " ").trim(), dirs, now: Date.now() });
+  if (temp) manifest = { ...manifest, temp: true };
   const known = await loadProjects();
   // Several projects: --project a --project b, or --project a,b.
   for (let i = 0; i < argvRaw.length; i++) if (argvRaw[i] === "--project" && argvRaw[i + 1]) {
@@ -358,7 +363,7 @@ async function cmdNew({ flags, rest }) {
     await writeClaudeMd(home, manifest);
   }
   const np = manifest.projects?.length ?? 0;
-  console.log(`loop ${id}: ${home} (${dirs.length} context folder${dirs.length === 1 ? "" : "s"}${np ? `; project${np === 1 ? "" : "s"} ${manifest.projects.join(", ")}` : ""})${dry ? " [dry run: nothing written]" : ""}`);
+  console.log(`${temp ? "temporary " : ""}loop ${id}: ${home} (${dirs.length} context folder${dirs.length === 1 ? "" : "s"}${np ? `; project${np === 1 ? "" : "s"} ${manifest.projects.join(", ")}` : ""})${dry ? " [dry run: nothing written]" : ""}`);
   for (const l of iso.lines) console.log(l);
   if (flags["no-lead"]) return;
 
@@ -367,6 +372,7 @@ async function cmdNew({ flags, rest }) {
   const autostart = manifest.goal && known.some((p) => p.autostart && manifest.projects?.includes(p.name));
   const task = typeof flags.task === "string" ? flags.task : autostart
     ? `You lead the loop ${id}. Read CLAUDE.md, run \`omniloop brief\`, then do the goal with your project's skill: ${manifest.goal}`
+    : temp ? `You lead the temporary loop ${id}. Read CLAUDE.md, run \`omniloop brief\`, then ask the user what to do first. When they say they're done, run \`omniloop rm\`.`
     : `You lead the loop ${id}. Read CLAUDE.md, run \`omniloop brief\`, then ask the user what to do first.`;
   await startLead(id, manifest, task, { dry: flags["dry-run"] });
 }
@@ -455,7 +461,8 @@ async function cmdAddDir({ flags, rest }) {
 async function allManifests() {
   const root = join(homedir(), LOOPS_DIR);
   const names = await readdir(root).catch(() => []);
-  return (await Promise.all(names.map((n) => manifestOf(n)))).filter((m) => m?.id);
+  // A renamed loop leaves its old name as a link to the new folder: count each loop once, under its own name.
+  return (await Promise.all(names.map(async (n) => { const m = await manifestOf(n); return m?.id === n ? m : null; }))).filter(Boolean);
 }
 
 async function cmdShared({ flags }) {
@@ -479,9 +486,9 @@ async function loopOfMe(flags) {
 }
 
 async function cmdGoal({ flags, rest }) {
-  const sub = rest[0] && ["set", "add", "done"].includes(rest[0]) ? rest.shift() : null;
+  const sub = rest[0] && ["set", "add", "done", "edit"].includes(rest[0]) ? rest.shift() : null;
   const id = await loopOfMe(flags);
-  if (!id) die("usage: omniloop goal [set \"…\" | add \"…\" | done <n>] [--loop id]");
+  if (!id) die("usage: omniloop goal [set \"…\" | add \"…\" | edit <n> \"…\" | done <n>] [--loop id]");
   const home = loopHome(homedir(), id);
   const m = await manifestOf(id);
   if (!m) die(`loop ${id} has no folder (${home}); make one with omniloop new`);
@@ -493,7 +500,8 @@ async function cmdGoal({ flags, rest }) {
     return;
   }
   const now = Date.now();
-  const r = sub === "set" ? setGoal(m, rest.join(" "), now) : sub === "add" ? addGoal(m, rest.join(" "), now) : finishGoal(m, rest[0], now);
+  const r = sub === "set" ? setGoal(m, rest.join(" "), now) : sub === "add" ? addGoal(m, rest.join(" "), now)
+    : sub === "edit" ? editGoal(m, rest[0], rest.slice(1).join(" "), now) : finishGoal(m, rest[0], now);
   if (r.error) die(r.error);
   if (r.manifest === m) return console.log(`${id}: no change`);
   const next = r.manifest;
@@ -501,7 +509,7 @@ async function cmdGoal({ flags, rest }) {
   await writeClaudeMd(home, next, await readFile(join(home, "CLAUDE.md"), "utf8").catch(() => null));
   // The feed line comes before anything that needs herdr-core, so it lands even when hc is down.
   const gone = sub === "done" ? goalsOf(m).find((g) => String(g.n) === String(rest[0]))?.text : null;
-  await postFeed(id, me() ?? YOU, sub === "set" ? `goal set: ${openGoals(next)[0]?.text ?? ""}` : sub === "add" ? `goal added: ${rest.join(" ")}` : `goal ${rest[0]} done${gone ? `: ${gone}` : ""}`);
+  await postFeed(id, me() ?? YOU, sub === "set" ? `goal set: ${openGoals(next)[0]?.text ?? ""}` : sub === "add" ? `goal added: ${rest.join(" ")}` : sub === "edit" ? `goal ${rest[0]} reworded: ${rest.slice(1).join(" ")}` : `goal ${rest[0]} done${gone ? `: ${gone}` : ""}`);
   // Members: the label carries the current goal (the tabs and status bar read it). Agents started with omniloop's
   // plugin hear about the change from its hook on their next prompt; others get the note typed in, if idle.
   let members = [];
@@ -669,9 +677,9 @@ async function cmdReply({ flags, rest }) {
 const ownerOf = (w) => (!w || w === true ? null : w === "you" ? YOU : w === "me" ? me() ?? YOU : w);
 
 async function cmdTask({ flags, rest }) {
-  const sub = rest[0] && ["ls", "add", "done", "give"].includes(rest[0]) ? rest.shift() : null;
+  const sub = rest[0] && ["ls", "add", "done", "give", "edit", "rm", "reopen", "move"].includes(rest[0]) ? rest.shift() : null;
   const id = await loopOfMe(flags);
-  if (!id) die('usage: omniloop task [ls | add "…" [--for you|me|t3] | done N | give N you|t3] [--loop id]');
+  if (!id) die('usage: omniloop task [ls | add "…" [--for you|me|t3] | done N | give N you|t3 | edit N "…" | reopen N | rm N | move N <loop>] [--loop id]');
   const home = loopHome(homedir(), id);
   if (!(await manifestOf(id))) die(`loop ${id} has no folder (${home}); make one with omniloop new`);
   const by = me() ?? YOU, now = Date.now();
@@ -686,6 +694,7 @@ async function cmdTask({ flags, rest }) {
     for (const a of agents) out.push(`  ${a.owner}${a.owner === me() ? " (me)" : ""}:`, ...a.tasks.map((t) => `    ${t.n}. ${t.text}${t.by !== a.owner ? ` (from ${t.by})` : ""}`));
     return console.log(out.join("\n"));
   }
+  if (["edit", "rm", "reopen", "move"].includes(sub)) return taskChange(sub, id, home, rest, by, now);
   let r;
   if (sub === "add") {
     const owner = ownerOf(flags.for) ?? by; // no --for: the caller's own task (yours, from a plain shell)
@@ -704,6 +713,32 @@ async function cmdTask({ flags, rest }) {
   }
 }
 
+/** task edit / reopen / rm / move: change one task in place, or move it to another loop (same owner and number order there). */
+async function taskChange(sub, id, home, rest, by, now) {
+  const n = rest[0];
+  if (sub === "move") {
+    const to = rest[1];
+    if (!to || to === id) die("usage: omniloop task move N <loop>");
+    const toM = await manifestOf(to);
+    if (!toM || toM.id !== to) die(`no loop ${to} here`);
+    const peek = tasksOf((await readJson(join(home, "tasks.json"))) ?? {}).find((x) => x.n === Number(n));
+    if (!peek) die(`no task ${n}`);
+    const toHome = loopHome(homedir(), to);
+    const added = await withTasks(toHome, (f) => addTask(f, { text: peek.text, owner: peek.for, by: peek.by, now }));
+    if (added.error) die(added.error);
+    await withTasks(home, (f) => removeTask(f, n));
+    await postFeed(id, by, `task ${n} moved to ${to}: ${peek.text}`);
+    await postFeed(to, by, `task ${added.task.n} moved here from ${id}: ${peek.text}`);
+    return console.log(`moved: ${id} task ${n} is now ${to} task ${added.task.n}. ${peek.text}`);
+  }
+  const r = await withTasks(home, (f) => sub === "edit" ? editTask(f, n, rest.slice(1).join(" ")) : sub === "reopen" ? reopenTask(f, n) : removeTask(f, n));
+  if (r.error) die(r.error);
+  const t = r.task;
+  const what = sub === "edit" ? "reworded" : sub === "reopen" ? "reopened" : "deleted";
+  console.log(`${what}: ${t.n}. ${t.text}`);
+  await postFeed(id, by, `task ${t.n} ${what}: ${t.text}`);
+}
+
 async function cmdProject({ flags, rest }) {
   const sub = rest.shift();
   const projects = await loadProjects();
@@ -718,22 +753,23 @@ async function cmdProject({ flags, rest }) {
     if (flags.json) return console.log(JSON.stringify(m.map((x) => ({ ...x, description: projects.find((p) => p.name === x.name)?.description ?? "" }))));
     return console.log(m.length ? m.map((x) => `${x.name} (${x.hits.join(", ")})`).join("\n") : "no project matches");
   }
-  if (sub === "add") {
+  if (sub === "add" || sub === "rm") {
     const name = rest[0];
     let id = typeof flags.loop === "string" ? flags.loop : null;
     if (!id && me()) id = (await hc(["get", me()]).catch(() => null))?.labels?.[LABEL.loop] ?? null;
-    if (!name || !id) die("usage: omniloop project add <project> [--loop id]");
-    if (!projects.some((p) => p.name === name)) die(`no project named ${name} (omniloop project ls)`);
+    if (!name || !id) die(`usage: omniloop project ${sub} <project> [--loop id]`);
+    if (sub === "add" && !projects.some((p) => p.name === name)) die(`no project named ${name} (omniloop project ls)`);
     const home = loopHome(homedir(), id);
     const m = await manifestOf(id);
     if (!m) die(`loop ${id} has no folder (${home}); make one with omniloop new`);
-    const next = addProject(m, name);
-    if (next === m) return console.log(`${id} already has the ${name} project`);
+    const next = sub === "add" ? addProject(m, name) : removeProject(m, name);
+    if (next === m) return console.log(sub === "add" ? `${id} already has the ${name} project` : `${id} has no ${name} project`);
     await writeJson(join(home, "loop.json"), next);
     await writeClaudeMd(home, next, await readFile(join(home, "CLAUDE.md"), "utf8").catch(() => null));
-    return console.log(`added the ${name} project to ${id}: members started from now get its skills and tools; running ones see its notes in CLAUDE.md.`);
+    return console.log(sub === "add" ? `added the ${name} project to ${id}: members started from now get its skills and tools; running ones see its notes in CLAUDE.md.`
+      : `removed the ${name} project from ${id}: members started from now don't get it; running ones keep what they loaded.`);
   }
-  die("usage: omniloop project ls [--json] | project match <text> [--json] | project add <project> [--loop id]");
+  die("usage: omniloop project ls [--json] | project match <text> [--json] | project add|rm <project> [--loop id]");
 }
 
 const BRIEF = `omniloop: you are in a loop (a piece of work with one lead). Commands (short output):
@@ -741,12 +777,15 @@ const BRIEF = `omniloop: you are in a loop (a piece of work with one lead). Comm
   omniloop start <loop> --job J -- claude "<task>"   start a helper that reports to you; prints its id
   omniloop timer 20m "<what to check>"    get a note later; don't sleep or poll
   omniloop needs-you [off]                this block is the user's (credentials, spending, anything public)
-  omniloop goal [set "…" | add "…" | done N]   the user's end goal for this loop (always one); your work serves it
-  omniloop task [ls | add "…" --for you|me|t3 | done N | give N t3]   tasks: yours, other agents', the user's
+  omniloop goal [set "…" | add "…" | edit N "…" | done N]   the user's end goal for this loop (always one); your work serves it
+  omniloop task [ls | add "…" --for you|me|t3 | done N | give N t3 | edit N "…" | reopen N | rm N | move N <loop>]
   omniloop say "…" [--thread T]           post to the loop's chat feed (the user reads it there)
-  omniloop add-dir <path>                 add a context folder to the loop (CLAUDE.md lists them)
+  omniloop add-dir <path> | rm-dir <path> add or remove a context folder of the loop (CLAUDE.md lists them)
   omniloop shared                         other loops in this loop's folders, and their leads (tell them before a change)
-  omniloop project ls | project add <project>      reusable context (skills, tools, notes) for a kind of work
+  omniloop project ls | project add|rm <project>   reusable context (skills, tools, notes) for a kind of work
+  omniloop rename [<old>] <new>           rename (move) a loop: folder, worktrees, branches, space, labels
+  omniloop rm [<loop>] [--force]          delete a loop and close its space (refuses unmerged work); ask the user first
+  omniloop new --temp [--goal "…"]        a temporary loop: no memory, deleted on rm or once its last member exits
   omniloop handoff <file>                 at ~60% context: write <file>, run this, then stop
   omniloop send <t> "<text>"              message a helper or your lead (arrives labelled as you, not as the user)
   omniloop sessions                       Claude sessions you can send to (address, name, pid)
@@ -754,6 +793,224 @@ const BRIEF = `omniloop: you are in a loop (a piece of work with one lead). Comm
 Rules: end your turn when you wait; the watcher types a one-line note into you when a helper blocks,
 finishes or stalls ("omniloop: t3 blocked (question): ..."). Never poll, sleep or loop on hc wait.
 Only the lead (and needs-you) reaches the user; answer your helpers' questions yourself.`;
+
+// ---- rename, remove, temporary loops (core/lifecycle.js has the rules) ---------------------------
+
+/** A renamed loop leaves its old name as a link to the new folder. Drop that link, so the name can be used again. */
+async function dropAlias(id) {
+  const p = loopHome(homedir(), id);
+  const st = await lstat(p).catch(() => null);
+  if (st?.isSymbolicLink() && (await manifestOf(id))?.id !== id) await rm(p, { force: true });
+}
+
+/** The names in ~/loops that link to this loop's folder (left by renames). */
+async function aliasesOf(home) {
+  const root = join(homedir(), LOOPS_DIR), out = [];
+  for (const n of await readdir(root).catch(() => [])) {
+    const p = join(root, n);
+    if ((await lstat(p).catch(() => null))?.isSymbolicLink() && (await realpath(p).catch(() => null)) === home) out.push(p);
+  }
+  return out;
+}
+
+/** This computer's terminals in a loop (null when herdr-core doesn't answer). */
+async function membersOf(id) {
+  try { return (await allTerminals()).filter((t) => !t.address.includes("/") && t.labels?.[LABEL.loop] === id); } catch { return null; }
+}
+
+// omniloop rm-dir <path>: take a context folder out of the loop. Its worktree (if the loop has one) is removed like rm does.
+async function cmdRmDir({ flags, rest }) {
+  const path = rest[0] && resolvePath(rest[0]);
+  const id = await loopOfMe(flags);
+  if (!path || !id) die("usage: omniloop rm-dir <path> [--loop id] [--force]");
+  const home = loopHome(homedir(), id);
+  const m = await manifestOf(id);
+  if (!m) die(`loop ${id} has no folder (${home})`);
+  const next = removeDir(m, path);
+  if (next === m) return console.log(`${path} isn't in ${id}`);
+  for (const d of m.dirs) if (d.path === path && d.worktree && !d.machine && (await exists(d.worktree))) {
+    const r = await worktreeFacts(d);
+    const chk = removeCheck([r], { force: Boolean(flags.force) });
+    if (!chk.ok) die(`not removed: ${chk.problems.join("; ")}. Land that work first, or rerun with --force (uncommitted files are lost; the branch is kept).`);
+    for (const l of await dropWorktree(r, Boolean(flags.force))) console.log(l);
+  }
+  await writeJson(join(home, "loop.json"), next);
+  await writeClaudeMd(home, next, await readFile(join(home, "CLAUDE.md"), "utf8").catch(() => null));
+  await postFeed(id, me() ?? YOU, `context folder removed: ${path}`);
+  console.log(`removed ${path} from ${id}: members started from now don't get it.`);
+}
+
+/** A worktree's state: uncommitted files, and commits on its branch not in the repo's checked-out branch. */
+async function worktreeFacts(d) {
+  let dirty = 0, ahead = 0;
+  const here = await exists(d.worktree);
+  if (here) dirty = (await git(d.worktree, ["status", "--porcelain"]).catch(() => "")).split("\n").filter(Boolean).length;
+  try {
+    const main = await git(d.path, ["rev-parse", "--abbrev-ref", "HEAD"]);
+    ahead = Number(await git(d.path, ["rev-list", "--count", `${main}..${d.branch}`])) || 0;
+  } catch {}
+  return { ...d, dirty, ahead, here };
+}
+
+/** Remove a loop's worktree, and its branch when merged (an unmerged branch is always kept). Returns output lines. */
+async function dropWorktree(w, force) {
+  const out = [];
+  if (w.here) {
+    try { await git(w.path, ["worktree", "remove", ...(force ? ["--force"] : []), w.worktree]); out.push(`  removed worktree ${w.worktree}`); }
+    catch (e) { out.push(`  worktree ${w.worktree} not removed: ${String(e.stderr || e.message).trim().split("\n")[0]}`); return out; }
+  }
+  try { await git(w.path, ["branch", "-d", w.branch]); out.push(`  deleted branch ${w.branch} (merged)`); }
+  catch { out.push(`  kept branch ${w.branch} in ${w.path} (not merged)`); }
+  return out;
+}
+
+/**
+ * omniloop rename [<old>] <new>: rename (move) a loop. The folder moves to ~/loops/<new> and the old name stays as a
+ * link to it, so members already running there keep working. Worktrees follow (git worktree repair) and their branch
+ * becomes <new>/work; members are relabelled, the space renamed, the Claude project folder moved (and linked).
+ */
+async function cmdRename({ flags, rest }) {
+  const [a, b] = rest;
+  const from = b ? a : await loopOfMe(flags), to = b ?? a;
+  if (!validId(from) || !validId(to)) die("usage: omniloop rename [<old>] <new>   (a-z 0-9 - _; in a loop, <old> defaults to it)");
+  if (from === to) return console.log(`${from} is already called that`);
+  const m = await manifestOf(from);
+  if (!m || m.id !== from) die(`no loop ${from} here`);
+  await dropAlias(to);
+  const fromHome = loopHome(homedir(), from), toHome = loopHome(homedir(), to);
+  if (await lstat(toHome).catch(() => null)) die(`${toHome} already exists`);
+  const members = await membersOf(from);
+  const sp = await loopSpace(from);
+  const now = Date.now();
+  let next = renamedManifest(m, { from, to, fromHome, toHome, now });
+  if (flags["dry-run"]) return console.log(JSON.stringify({ move: [fromHome, toHome], relabel: members?.map((t) => t.address) ?? "hc down", space: sp?.id ?? null, dirs: next.dirs }, null, 1));
+
+  await rename(fromHome, toHome);
+  await symlink(toHome, fromHome);
+  const lines = [];
+  // Worktrees moved with the folder: repoint git at them, then rename their branch.
+  next = { ...next, dirs: await Promise.all(next.dirs.map(async (d, i) => {
+    const old = m.dirs[i];
+    if (!d.worktree || d.machine || d.worktree === old.worktree) return d;
+    try { await git(d.path, ["worktree", "repair", d.worktree]); } catch {}
+    try { await git(d.worktree, ["rev-parse", "--git-dir"]); } catch (e) { lines.push(`  ${d.worktree}: git doesn't see this worktree yet; run git -C ${d.path} worktree repair ${d.worktree}`); }
+    if (d.branch === old.branch) return d;
+    try { await git(d.path, ["branch", "-m", old.branch, d.branch]); lines.push(`  ${d.path}: worktree ${d.worktree}, branch ${d.branch}`); return d; }
+    catch (e) { lines.push(`  ${d.path}: branch stays ${old.branch} (${String(e.stderr || e.message).trim().split("\n")[0]})`); return { ...d, branch: old.branch }; }
+  })) };
+  await writeJson(join(toHome, "loop.json"), next);
+  let md = await readFile(join(toHome, "CLAUDE.md"), "utf8").catch(() => null);
+  if (md) { md = renameText(md, from, to); if (!next.temp) md = withFormerlyNote(md, from, new Date(now).toISOString().slice(0, 10)); }
+  await writeClaudeMd(toHome, next, md);
+  // Claude Code saves sessions by folder: move them along, and link the old one for sessions still running.
+  const projects = join(homedir(), ".claude", "projects");
+  const ck = join(projects, claudeProjectKey(fromHome)), nk = join(projects, claudeProjectKey(toHome));
+  if ((await lstat(ck).catch(() => null))?.isDirectory() && !(await exists(nk))) { await rename(ck, nk); await symlink(nk, ck); }
+  await rename(join(HOME, `state-${from}.json`), join(HOME, `state-${to}.json`)).catch(() => {});
+  if (members) for (const t of members) await hc(["label", t.address, `${LABEL.loop}=${to}`], { json: false }).catch(() => lines.push(`  couldn't relabel ${t.address}: omniloop join ${to} --terminal ${t.address}`));
+  else lines.push("  herdr-core didn't answer: members keep the old name; omniloop join <new> --terminal <t> for each");
+  if (sp) await run("herdr-app", ["do", "space.rename", JSON.stringify({ id: sp.id, name: to })]).catch(() => lines.push(`  space ${sp.id} keeps the old name`));
+  await postFeed(to, me() ?? YOU, `loop renamed: ${from} → ${to}`);
+  console.log(`renamed ${from} to ${to}: ${toHome}${members?.length ? `; ${members.length} member(s) relabelled` : ""}${sp ? "; space renamed" : ""}. ${fromHome} links to it for members already running.`);
+  for (const l of lines) console.log(l);
+}
+
+/**
+ * omniloop rm [<loop>] [--force] [--purge]: delete a loop. Refuses when a worktree has uncommitted files or unmerged
+ * commits (--force: drop the files, keep the branch), or when it has running members and you're not one of them
+ * (--force: stop them). Deletes the loop folder and its worktrees, never its context folders. Closes its space last,
+ * from a detached process, so it works from inside the loop. --purge (always on for a temporary loop) also deletes
+ * its Claude transcripts, scratchpads, prompt-history lines and omniloop's own records of its terminals.
+ */
+async function cmdRm({ flags, rest }) {
+  const id = rest[0] ?? (await loopOfMe(flags));
+  if (!validId(id)) die("usage: omniloop rm [<loop>] [--force] [--purge] [--dry-run]");
+  const m = await manifestOf(id);
+  if (!m || m.id !== id) die(`no loop ${id} here`);
+  const root = await realpath(join(homedir(), LOOPS_DIR));
+  const home = await realpath(loopHome(homedir(), id));
+  if (dirname(home) !== root) die(`refusing: ${home} isn't a folder in ${root}`);
+  const force = Boolean(flags.force), purge = Boolean(flags.purge) || Boolean(m.temp);
+  const wts = [];
+  for (const d of m.dirs ?? []) if (d.worktree && !d.machine) wts.push(await worktreeFacts(d));
+  const chk = removeCheck(wts, { force });
+  if (!chk.ok) die(`${id} not removed: ${chk.problems.join("; ")}. Land or drop that work first, or rerun with --force (uncommitted files are lost; an unmerged branch is kept).`);
+  const members = await membersOf(id);
+  if (members === null && !force) die("herdr-core (hc) didn't answer, so the loop's running members can't be found; rerun with --force to delete anyway");
+  const live = (members ?? []).filter((t) => t.state === "live");
+  const inside = me() && live.some((t) => t.address === me());
+  if (live.length && !inside && !force) die(`${id} has ${live.length} running member(s) (${live.map((t) => t.address).join(", ")}): rerun with --force to stop them, or run it from inside the loop`);
+  const sp = await loopSpace(id);
+  const aliases = await aliasesOf(home);
+  const job = { id, home, root, space: sp?.id ?? null, terms: (members ?? []).map((t) => t.address), purge, aliases, formerly: (m.formerly ?? []).map((f) => loopHome(homedir(), f.id)) };
+  if (flags["dry-run"]) return console.log(JSON.stringify({ worktrees: wts.map((w) => w.worktree), ...job }, null, 1));
+
+  const lines = [];
+  for (const w of wts) lines.push(...(await dropWorktree(w, force)));
+  // Timers for its members would only fire into nothing.
+  for (const f of await readdir(TIMERS).catch(() => [])) {
+    const t = await readJson(join(TIMERS, f));
+    if (t && job.terms.includes(t.to)) await rm(join(TIMERS, f), { force: true });
+  }
+  await rm(join(HOME, `state-${id}.json`), { force: true });
+  console.log(`${m.temp ? "temporary " : ""}loop ${id} deleted${purge ? ", with its transcripts and history" : ""}${sp ? "; its space closes now" : ""}.`);
+  for (const l of lines) console.log(l);
+  // The rest (stopping members, closing the space, deleting the folder and transcripts) runs detached: when this runs
+  // inside the loop, closing the space ends this very process.
+  const p = spawn(process.execPath, [fileURLToPath(import.meta.url), "_reap", JSON.stringify(job)], { cwd: tmpdir(), detached: true, stdio: "ignore" });
+  p.unref();
+}
+
+/** The detached second half of rm. Stops the loop's terminals, then deletes; checks the folder again before any rm. */
+async function cmdReap({ rest }) {
+  const job = JSON.parse(rest[0]);
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  if (!validId(job.id) || job.home !== join(job.root, job.id)) return;
+  await wait(800); // let rm's caller finish printing
+  for (const t of job.terms) await run("hc", ["kill", t]).catch(() => {});
+  if (job.space) await run("herdr-app", ["do", "space.close", JSON.stringify({ id: job.space, confirmed: true })]).catch(() => {});
+  for (let i = 0; i < 40; i++) {
+    const states = await Promise.all(job.terms.map((t) => hc(["get", t]).then((g) => g.state).catch(() => null)));
+    if (!states.includes("live")) break;
+    await wait(500);
+  }
+  await wait(1000); // a stopping Claude session writes its transcript last
+  for (const t of job.terms) await run("hc", ["rm", t]).catch(() => {});
+  for (const a of job.aliases) if (dirname(a) === job.root) await rm(a, { force: true });
+  if ((await realpath(job.home).catch(() => null)) === job.home) await rm(job.home, { recursive: true, force: true });
+  if (job.purge) await purgeTraces(job);
+}
+
+/** Delete what Claude Code and omniloop kept about a loop's sessions. */
+async function purgeTraces(job) {
+  const claude = join(homedir(), ".claude"), projects = join(claude, "projects");
+  const folders = [job.home, ...job.aliases, ...job.formerly];
+  const keys = folders.map(claudeProjectKey);
+  const sessions = [];
+  for (const n of await readdir(projects).catch(() => [])) {
+    if (!keys.some((k) => isLoopClaudeEntry(n, k))) continue;
+    const dir = join(projects, n);
+    for (const f of await readdir(dir).catch(() => [])) if (f.endsWith(".jsonl")) sessions.push(f.slice(0, -6));
+    await rm(dir, { recursive: true, force: true });
+  }
+  const tmpRoot = `/private/tmp/claude-${process.getuid()}`;
+  for (const k of keys) await rm(join(tmpRoot, k), { recursive: true, force: true });
+  for (const sid of sessions) {
+    if (!/^[0-9a-f-]{36}$/.test(sid)) continue;
+    for (const p of [join(claude, "file-history", sid), join(claude, "session-env", sid), join(claude, "tasks", sid), join(claude, "debug", `${sid}.txt`), join(HOME, "goal-seen", sid)])
+      await rm(p, { recursive: true, force: true });
+    for (const f of await readdir(join(claude, "todos")).catch(() => [])) if (f.startsWith(sid)) await rm(join(claude, "todos", f), { force: true });
+  }
+  for (const t of job.terms) if (/^[\w-]+$/.test(t)) for (const d of ["sessions", "turns"]) await rm(join(HOME, d, `${t}.json`), { force: true });
+  // Prompt history: drop the lines typed in this loop. Rewritten in one rename; a line another session appends in
+  // that instant could be lost, so it's done once, last.
+  const hist = join(claude, "history.jsonl");
+  const text = await readFile(hist, "utf8").catch(() => null);
+  if (text != null) {
+    const r = scrubHistory(text, folders);
+    if (r.dropped) { await writeFile(hist + ".omniloop-tmp", r.text); await rename(hist + ".omniloop-tmp", hist); }
+  }
+}
 
 // ---- watch ----------------------------------------------------------------------------------
 
@@ -845,6 +1102,23 @@ async function cmdWatch({ flags }) {
         });
     }
     await persist(r.you);
+    if (!quiet && Date.now() - lastSweep > SWEEP_MS) { lastSweep = Date.now(); await sweepTemp().catch((e) => log("SWEEP", `failed: ${e.message}`)); }
+  };
+
+  // Temporary loops end by themselves once their last member is gone (core/lifecycle.js endedTempLoops). The terminal
+  // list comes from hc's own event stream, so a sweep never runs on a failed hc call.
+  const SWEEP_MS = 60_000, seenTemp = new Set(), triedTemp = new Set();
+  let lastSweep = 0;
+  const sweepTemp = async () => {
+    const temps = (await allManifests()).filter((m) => m.temp && (!loop || m.id === loop));
+    if (!temps.length) return;
+    const live = new Set([...terms.values()].filter((t) => t.state !== "finished" && !t.address.includes("/")).map((t) => t.labels?.[LABEL.loop]).filter(Boolean));
+    for (const id of endedTempLoops(temps, live, seenTemp, Date.now())) {
+      if (triedTemp.has(id)) continue;
+      triedTemp.add(id);
+      try { const { stdout } = await run(process.execPath, [fileURLToPath(import.meta.url), "rm", id, "--auto"], { timeout: 60_000 }); log("TEMP", stdout.trim()); }
+      catch (e) { log("TEMP", `${id} kept: ${String(e.stderr || e.message).trim().split("\n")[0]}`); }
+    }
   };
   const soon = () => { clearTimeout(timer); timer = setTimeout(tick, 300); };
 
@@ -982,11 +1256,12 @@ async function cmdSessions() {
 
 const table = {
   send: cmdSend, sessions: cmdSessions,
+  rename: cmdRename, rm: cmdRm, "rm-dir": cmdRmDir, _reap: cmdReap,
   ls: cmdLs, new: cmdNew, goal: cmdGoal, task: cmdTask, say: cmdSay, feed: cmdFeed, reply: cmdReply, "add-dir": cmdAddDir, project: cmdProject, start: cmdStart, join: cmdJoin, leave: cmdLeave, "needs-you": cmdNeedsYou, shared: cmdShared,
   timer: cmdTimer, handoff: cmdHandoff, watch: cmdWatch, index: cmdIndex, propose: cmdPropose, revive: cmdRevive, brief: async () => console.log(BRIEF),
 };
 if (!table[cmd]) {
-  console.log("omniloop new | revive | propose | index | goal | task | say | feed | reply | add-dir | shared | project | ls | start | join | leave | needs-you | timer | handoff | watch [--loop id] [--dry-run] | brief");
+  console.log("omniloop new [--temp] | rename | rm | rm-dir | revive | propose | index | goal | task | say | feed | reply | add-dir | shared | project | ls | start | join | leave | needs-you | timer | handoff | watch [--loop id] [--dry-run] | brief");
   process.exit(cmd ? 1 : 0);
 }
 await table[cmd](parsed).catch((e) => die(e.stderr?.toString().trim() || e.message));

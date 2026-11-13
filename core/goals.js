@@ -54,6 +54,18 @@ export function finishGoal(m, n, now) {
   return { manifest: done(m, gs, cur) };
 }
 
+/** Reword open goal n; rewording the current goal changes the loop's goal line too. */
+export function editGoal(m, n, text, now) {
+  const t = clean(text);
+  if (!t) return { error: "a goal needs words" };
+  const open = openGoals(m);
+  const g = open.find((x) => x.n === Number(n));
+  if (!g) return { error: `no open goal ${n}` };
+  if (g.text === t) return { manifest: m };
+  const gs = goalsOf(m).map((x) => (x.n === g.n ? { ...x, text: t, edited: now } : x));
+  return { manifest: done(m, gs, g.n === open[0].n ? t : open[0].text) };
+}
+
 export const GOAL_START = "<!-- omniloop:goal -->";
 export const GOAL_END = "<!-- /omniloop:goal -->";
 

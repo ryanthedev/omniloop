@@ -68,3 +68,27 @@ export function taskLines(file, owner) {
 export function taskNote(task, loop) {
   return `omniloop: task ${task.n} in loop ${loop} is yours (from ${task.by}): ${task.text}. Done: omniloop task done ${task.n}`;
 }
+
+/** Reword task n (open or done). */
+export function editTask(file, n, text) {
+  const t = clean(text);
+  if (!t) return { error: "a task needs words" };
+  return change(file, n, (x) => ({ task: { ...x, text: t } }));
+}
+
+/** Open a done task again. */
+export function reopenTask(file, n) {
+  return change(file, n, (t) => {
+    if (!t.done) return { error: `task ${n} is still open` };
+    const { done, doneBy, ...rest } = t;
+    return { task: rest };
+  });
+}
+
+/** Delete task n for good (numbers of the others don't change). Returns { file, task } or { error }. */
+export function removeTask(file, n) {
+  const ts = tasksOf(file);
+  const task = ts.find((x) => x.n === Number(n));
+  if (!task) return { error: `no task ${n}` };
+  return { file: { ...file, tasks: ts.filter((x) => x !== task) }, task };
+}

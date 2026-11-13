@@ -37,6 +37,13 @@ export function addProject(manifest, name) {
   return { ...manifest, projects: [...projects, name] };
 }
 
+/** Remove a project name. Returns a new manifest (or the same one when it isn't there). */
+export function removeProject(manifest, name) {
+  const projects = manifest.projects ?? [];
+  if (!projects.includes(name)) return manifest;
+  return { ...manifest, projects: projects.filter((p) => p !== name) };
+}
+
 /**
  * What the loop's projects add to a member's launch. `found`: [{ name, dir, repos }] for the loop's projects that exist
  * (repos already resolved to absolute paths). Returns { pluginDirs, dirs, missing }.
