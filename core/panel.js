@@ -150,7 +150,9 @@ export function loopRows(id, disk, live, open = {}) {
   for (const d of dirs) {
     const machine = d.machine ?? disk?.machine ?? null;
     // A folder kept on another machine than the loop's can't be looked at from where the loop lives.
-    withFiles({ kind: "dir", text: d.path, ...placeOf(d.path), machine }, instructions(d.machine ? null : d.files, d.machine ?? null));
+    // A loop with its own copy of a shared repo (a git worktree) works there, on its own branch: say so.
+    const copy = d.worktree ? { copy: placeOf(d.worktree), branch: d.branch ?? null } : {};
+    withFiles({ kind: "dir", text: d.path, ...placeOf(d.path), machine, ...copy }, instructions(d.machine ? null : d.files, d.machine ?? null));
   }
   for (const p of projects) {
     const name = typeof p === "string" ? p : p.name;

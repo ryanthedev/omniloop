@@ -199,3 +199,12 @@ test("placeOf puts a folder's own name first and shortens any home to ~", () => 
   assert.equal(rows.find((r) => r.kind === "dir").name, "alpha");
   assert.equal(rows.find((r) => r.kind === "notes").name, "Loop notes");
 });
+
+test("a folder the loop works on in its own copy (git worktree) carries the copy and branch", () => {
+  const d = { ...disk[0], dirs: [{ path: "/Users/r/repos/omniloop", machine: null, worktree: "/Users/r/loops/alpha/wt/omniloop", branch: "alpha/work", base: "abc1234", dirty: [] }] };
+  const row = loopRows("alpha", d, null).find((r) => r.kind === "dir");
+  assert.equal(row.name, "omniloop"); assert.equal(row.where, "~/repos");
+  assert.deepEqual(row.copy, { name: "omniloop", where: "~/loops/alpha/wt" });
+  assert.equal(row.branch, "alpha/work");
+  assert.equal(loopRows("alpha", disk[0], null).find((r) => r.kind === "dir").copy, undefined);
+});

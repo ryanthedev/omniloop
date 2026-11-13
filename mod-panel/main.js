@@ -285,7 +285,7 @@ export default class OmniloopPanel extends View {
         .when(!r.forYou && Boolean(r.ago), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(r.ago)));
       case "dir": case "project": case "notes": {
         // Line 1: its name, big, so you can find it. Line 2: where it is (dim), and what instructions it carries.
-        const where = r.kind === "dir" && r.machine ? `on ${r.machine} · ${r.where}` : r.where;
+        const where = [r.kind === "dir" && r.machine ? `on ${r.machine}` : "", r.where, r.copy ? `own copy${r.branch ? ` on ${r.branch}` : ""}` : ""].filter(Boolean).join(" · ");
         const insColor = r.ins.state === "has" ? t.accent : t.dim;
         const icon = r.kind === "project" ? "◆" : r.kind === "notes" ? "✎" : "▣";
         return base(v_flex().id(`pr-${i}-${this.uid}`).py(5).gap(2).cursor_pointer())
