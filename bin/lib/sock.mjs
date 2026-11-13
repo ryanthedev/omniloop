@@ -2,6 +2,7 @@
 // and writes one labelled message to a session's messaging socket. No herdr needed: hc is only the fallback.
 import { readFile, readdir, open } from "node:fs/promises";
 import { createConnection } from "node:net";
+import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { envelope, frames, resolveTarget, route, senderName, udsAddress } from "../../core/deliver.js";
@@ -98,6 +99,14 @@ export async function modeFromTranscript(session) {
 export async function locate(target) {
   const [sessions, hooks] = await Promise.all([liveSessions(), hookRecords()]);
   const byAddress = Object.fromEntries(Object.entries(hooks).map(([a, r]) => [a, r.pid]));
+  // A herdr address with no hook record (a session started before the hook existed, or without the plugin):
+  // herdr knows the terminal's foreground process, which is the Claude session's pid.
+  const t = String(target ?? "");
+  const hookPidLive = byAddress[t] != null && sessions.some((s) => s.pid === Number(byAddress[t]));
+  if (/^t[0-9a-z]+$/.test(t) && !hookPidLive) {
+    const pid = await foregroundPid(t);
+    if (pid != null && sessions.some((s) => s.pid === pid)) byAddress[t] = pid;
+  }
   const r = resolveTarget(target, sessions, { byAddress });
   const hook = hooks[target] ?? Object.values(hooks).find((h) => r.session && h.pid === r.session.pid) ?? null;
   const looksLikeAddress = /^[a-z][a-z0-9]*$/i.test(String(target)) && !r.session;
@@ -151,4 +160,14 @@ export async function myAddress() {
   if (!sock) return null;
   const pid = (await liveSessions()).find((x) => x.messagingSocketPath === sock)?.pid;
   return pid == null ? null : Object.values(await hookRecords()).find((h) => h.pid === pid)?.address ?? null;
+}
+
+/** The pid of the program in front in an hc terminal on this computer, or null (no hc, no such terminal). */
+export function foregroundPid(address, { timeoutMs = 3000 } = {}) {
+  return new Promise((resolve) => {
+    execFile("hc", ["get", "--json", address], { timeout: timeoutMs, maxBuffer: 4 << 20 }, (err, out) => {
+      if (err) return resolve(null);
+      try { const p = JSON.parse(out)?.foreground?.pid; resolve(Number.isInteger(p) ? p : null); } catch { resolve(null); }
+    });
+  });
 }

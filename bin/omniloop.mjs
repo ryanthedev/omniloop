@@ -18,7 +18,7 @@ import { goalsOf, openGoals, setGoal, addGoal, finishGoal, withGoalBlock, goalNo
 import { feedEntry, feedLine, parseFeed, replyPlan, FEED_FILE } from "../core/feed.js";
 import { proposeArgs, checkProposal, fallbackProposal, identityTerms } from "../core/intake.js";
 import { userInfo, hostname } from "node:os";
-import { deliver, liveSessions, hookRecords, turnRecord } from "./lib/sock.mjs";
+import { deliver, liveSessions, hookRecords, turnRecord, foregroundPid } from "./lib/sock.mjs";
 import { YOU, addTask, finishTask, giveTask, openTasks, taskLines, taskNote, tasksOf } from "../core/tasks.js";
 
 const run = promisify(execFile);
@@ -923,6 +923,11 @@ async function cmdSend({ flags, rest }) {
 async function cmdSessions() {
   const [ss, hooks] = await Promise.all([liveSessions(), hookRecords()]);
   const addrOf = new Map(Object.values(hooks).map((h) => [h.pid, h.address]));
+  // Sessions without a hook record: herdr's terminals know their foreground pid.
+  try {
+    const ts = (await hc(["ls"])).terminals.filter((t) => t.agent === "claude-code" && !t.address.includes("/"));
+    await Promise.all(ts.map(async (t) => { const p = await foregroundPid(t.address); if (p != null && !addrOf.has(p)) addrOf.set(p, t.address); }));
+  } catch {}
   const rows = ss.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     .map((x) => `${addrOf.get(x.pid) ?? "-"}\t${x.name ?? "-"}\t${x.pid}\t${x.status ?? "?"}\t${x.messagingSocketPath ? "socket" : "no socket"}\t${x.cwd ?? ""}`);
   console.log(rows.length ? ["address\tname\tpid\tstatus\tvia\tcwd", ...rows].join("\n") : "no Claude sessions running");
