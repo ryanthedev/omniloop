@@ -160,3 +160,11 @@ test("identity guard (code, not prompt): a goal naming this computer or its pers
   assert.equal(identityLeak({ id: "deploy-to-ska", goal: "Deploy to ska." }, "deploy to ska", id), null);
   assert.equal(checkProposal({ structured_output: { id: "fix-login", goal: "Fix the login timeout." } }, req, [], { identity: id }).source, "model");
 });
+
+test("person guard: 'the user', he/she in a goal the request didn't use falls back", async () => {
+  const { personLeak } = await import("../core/intake.js");
+  assert.equal(personLeak("Remember the last machine the user selected.", "remember the last machine i used"), "user");
+  assert.equal(personLeak("Fix the bug he found.", "fix the bug"), "he");
+  assert.equal(personLeak("Plan their trip.", "plan their trip"), null);
+  assert.equal(checkProposal({ structured_output: { id: "x-y", goal: "Fix what the user saw." } }, "fix what i saw").source, "typed");
+});

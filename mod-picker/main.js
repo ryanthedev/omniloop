@@ -125,6 +125,7 @@ export default class OmniloopPicker extends View {
   selected() { const rows = this.rows(); return rows[clampAt(this.at, rows.length)]; }
 
   command(c, cx) {
+    if (this.drive(String(c ?? ""), cx)) return;
     if (c === "new" && this.step === "ask") return this.startNew(this.query, cx);
     const r = this.selected();
     if (this.step !== "ask" || r?.kind !== "loop") return;
@@ -139,6 +140,23 @@ export default class OmniloopPicker extends View {
       // Keep the moved loop selected.
       if (!this.query) this.at = Math.max(0, this.rows().findIndex((x) => x.entry?.key === key));
     }
+  }
+
+  /**
+   * Drive the picker without a keyboard (tests in a hidden window: `herdr-app do omniloop-picker.<command>`), through
+   * the same methods the keys call: type:<text>, enter, down, up, tab, esc. True when it was one of these.
+   */
+  drive(c, cx) {
+    if (c.startsWith("type:")) { this.input.set_value(c.slice(5)); this.changed(cx); return true; }
+    const n = Math.max(1, this.rows().length);
+    if (c === "enter") this.enter(cx);
+    else if (c === "tab") this.toggle(cx);
+    else if (c === "esc") this.back(cx);
+    else if (c === "down" || c === "up") {
+      if (this.step === "review") this.field(this.fresh.field === "id" ? "finalGoal" : "id", cx);
+      else this.at = (clampAt(this.at, n) + (c === "down" ? 1 : n - 1)) % n;
+    } else return false;
+    return true;
   }
 
   // ---- the new-loop steps ----

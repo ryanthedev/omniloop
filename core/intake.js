@@ -27,6 +27,13 @@ export function proposeArgs(request) {
 
 const oneLine = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
 // A path-looking word (/a/b, ~/x) in a goal means the model talked about its environment.
+// Words about the person asking ("the user", he/she…) that the request itself didn't use: the model guessed.
+const PERSON = ["user", "user's", "users", "he", "she", "him", "her", "his", "hers", "they", "them", "their"];
+export function personLeak(goal, request) {
+  const typed = new Set(String(request ?? "").toLowerCase().match(/[a-z']+/g) ?? []);
+  const said = String(goal ?? "").toLowerCase().match(/[a-z']+/g) ?? [];
+  return said.find((w) => PERSON.includes(w) && !typed.has(w)) ?? null;
+}
 const PATHY = /(^|\s)(~\/|\/(private|tmp|users|home|var)\b)/i;
 
 /** A clean id: lowercase, a-z 0-9 and single hyphens, at most MAX_ID, valid for a loop folder. "" when nothing is left. */
@@ -84,6 +91,6 @@ export function checkProposal(raw, request, taken = [], { identity = null } = {}
   if (!id || !goal || goal.length > MAX_GOAL || PATHY.test(goal)) return fallbackProposal(request, taken);
   // Code, not just the prompt: an answer naming this computer or its person (that the request didn't) is dropped,
   // so nothing about here reaches a loop on another machine.
-  if (identityLeak({ id, goal }, request, identity)) return fallbackProposal(request, taken);
+  if (identityLeak({ id, goal }, request, identity) || personLeak(goal, request)) return fallbackProposal(request, taken);
   return { id: uniqueId(id, taken), goal, source: "model" };
 }
