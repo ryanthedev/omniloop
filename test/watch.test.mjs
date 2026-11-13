@@ -1,0 +1,395 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { initState, step, parseDuration, STALL_MS, START_MS, startingClaude, sendFailed, hold } from "../core/watch.js";
+import { ESCALATE_MS } from "../core/omniloop.js";
+
+const T = (address, status, labels = {}, extra = {}) =>
+  ({ address, state: "live", status: typeof status === "string" ? { state: status } : status, labels, turn: 1, created_ms: 0, event_ms: 0, ...extra });
+const L = (extra = {}) => ({ omniloop: "m2", ...extra });
+const base = () => [
+  T("t1", "working", L({ "omniloop.lead": "1" })),
+  T("t2", "working", L({ "omniloop.to": "t1" })),
+  T("t3", "working", L({ "omniloop.to": "t2" })),
+];
+const put = (ts, address, patch) => ts.map((t) => t.address === address ? { ...t, ...patch } : t);
+
+test("start is silent: what is already true is not news", () => {
+  const ts = put(put(base(), "t3", { status: { state: "done" } }), "t2", { status: { state: "idle" } });
+  const s = initState(ts, 0);
+  assert.deepEqual(step(s, ts, 1).actions, []);
+});
+
+test("a blocked member's note waits for its working parent, then goes as one line", () => {
+  let s = initState(base(), 0);
+  let ts = put(base(), "t3", { status: { state: "blocked", kind: "question", msg: "which db?" } });
+  let r = step(s, ts, 1);
+  assert.deepEqual(r.actions, []);                                   // t2 is working: held
+  ts = put(ts, "t2", { status: { state: "done" } });
+  r = step(r.state, ts, 2);
+  // t2 finishing is t1's news (t1 working: held); t3's block goes to t2 now.
+  assert.deepEqual(r.actions, [{ type: "send", to: "t2", text: "omniloop: t3 blocked (question): which db?", if: null }]);
+  assert.deepEqual(step(r.state, ts, 3).actions, []);                // told once
+});
+
+test("several notes for one agent go in one send", () => {
+  const ts0 = [...base(), T("t4", "working", L({ "omniloop.to": "t2" }))];
+  let r = step(initState(ts0, 0), put(put(ts0, "t3", { status: { state: "done" } }), "t4", { status: { state: "done" } }), 1);
+  r = step(r.state, put(put(put(ts0, "t3", { status: { state: "done" } }), "t4", { status: { state: "done" } }), "t2", { status: { state: "idle" } }), 2);
+  assert.equal(r.actions.length, 1);
+  assert.equal(r.actions[0].text, "omniloop: t3 finished its turn · t4 finished its turn");
+});
+
+test("never type into a blocked agent", () => {
+  let r = step(initState(base(), 0), put(base(), "t3", { status: { state: "blocked", kind: "question" } }), 1);
+  r = step(r.state, put(put(base(), "t3", { status: { state: "blocked", kind: "question" } }), "t2", { status: { state: "blocked", kind: "question" } }), 2);
+  assert.ok(!r.actions.some((a) => a.type === "send" && a.to === "t2"));
+});
+
+test("the lead's block is for you, once", () => {
+  const ts = put(base(), "t1", { status: { state: "blocked", kind: "question" } });
+  const r = step(initState(base(), 0), ts, 1);
+  assert.equal(r.actions.length, 1);
+  assert.equal(r.actions[0].type, "you");
+  assert.equal(step(r.state, ts, 2).actions.length, 0);
+});
+
+test("a delivered note isn't re-sent up the chain when its parent blocks later", () => {
+  const q = { state: "blocked", kind: "question" };
+  let ts = put(put(base(), "t3", { status: q }), "t2", { status: { state: "idle" } });
+  let r = step(initState(base(), 0), ts, 1);
+  assert.equal(r.actions.length, 1);                                  // t2 hears it
+  ts = put(put(ts, "t2", { status: { state: "blocked", kind: "permission" } }), "t1", { status: { state: "idle" } });
+  r = step(r.state, ts, 2);
+  assert.deepEqual(r.actions.map((a) => [a.type, a.alert?.address ?? a.to]), [["you", "t2"]]);
+});
+
+test("a permission prompt anywhere is for you", () => {
+  const ts = put(base(), "t3", { status: { state: "blocked", kind: "permission", msg: "approve Bash: rm -rf x" } });
+  const r = step(initState(base(), 0), ts, 1);
+  assert.deepEqual(r.actions.map((a) => a.type), ["you"]);
+});
+
+test("a block nobody clears escalates to you after ESCALATE_MS", () => {
+  const ts = put(base(), "t3", { status: { state: "blocked", kind: "question" } });
+  let r = step(initState(base(), 0), ts, 0);
+  r = step(r.state, ts, ESCALATE_MS);
+  assert.deepEqual(r.actions.map((a) => [a.type, a.alert.why]), [["you", "nobody cleared it"]]);
+});
+
+test("a stall is told once to the parent, and again only after new progress", () => {
+  let r = step(initState(base(), 0), base(), STALL_MS - 1);
+  assert.equal(Object.keys(r.state.pending).length, 0);
+  r = step(r.state, base(), STALL_MS);
+  // t1 (lead) stalled: you; t2 stalled: t1 (held, working); t3: t2 (held).
+  assert.deepEqual(r.actions.map((a) => a.type), ["you"]);
+  assert.deepEqual(Object.keys(r.state.pending).sort(), ["t1", "t2"]);
+  const again = step(r.state, base(), STALL_MS + 1000);
+  assert.equal(again.actions.length, 0);
+});
+
+test("timers fire as a note when the agent stops", () => {
+  let s = initState(base(), 0, { timers: [{ id: "a", at: 100, to: "t2", text: "check the build" }] });
+  let r = step(s, base(), 100);
+  assert.equal(r.state.timers.length, 0);
+  r = step(r.state, put(base(), "t2", { status: { state: "idle" } }), 101);
+  assert.deepEqual(r.actions, [{ type: "send", to: "t2", text: "omniloop: timer: check the build", if: "idle" }]);
+});
+
+test("notes for a gone parent come to you", () => {
+  let r = step(initState(base(), 0), put(base(), "t3", { status: { state: "done" } }), 1);
+  r = step(r.state, put(put(base(), "t3", { status: { state: "done" } }), "t2", { state: "finished" }), 2);
+  assert.ok(r.actions.some((a) => a.type === "you" && a.alert.kind === "undeliverable"));
+});
+
+test("scoped to one loop: terminals outside it are never touched", () => {
+  const ts = [...put(base(), "t1", { status: { state: "blocked" } }), T("x1", "blocked", { omniloop: "other", "omniloop.lead": "1" }), T("t9", "blocked", {})];
+  const r = step(initState(base(), 0, { loop: "m2" }), ts, 1, { loop: "m2" });
+  assert.deepEqual(r.actions.map((a) => a.alert?.address ?? a.to), ["t1"]);
+});
+
+test("parseDuration", () => {
+  assert.equal(parseDuration("20m"), 1200000);
+  assert.equal(parseDuration("1h30m"), 5400000);
+  assert.equal(parseDuration("90s"), 90000);
+  assert.equal(parseDuration("soon"), null);
+});
+
+test("never type into a plain shell: a parent with no agent status gets nothing, you hear instead", () => {
+  let r = step(initState(base(), 0), put(base(), "t3", { status: { state: "done" } }), 1);
+  r = step(r.state, put(put(base(), "t3", { status: { state: "done" } }), "t2", { status: null }), 2);
+  assert.ok(!r.actions.some((a) => a.type === "send"));
+  assert.ok(r.actions.some((a) => a.type === "you" && a.alert.why === "its parent isn't an agent now"));
+});
+
+test("touchedByYou: a seen mark, or a you-facing agent starting work that the watcher didn't cause", async () => {
+  const { touchedByYou } = await import("../core/watch.js");
+  const a = (status, seen) => ({ status: { state: status }, labels: seen == null ? {} : { "herdr.seen": seen } });
+  assert.equal(touchedByYou(a("done", "3"), a("idle", "4")), true);                                  // looked at it
+  assert.equal(touchedByYou(a("idle"), a("working"), { reportsToYou: true }), true);                 // you prompted it
+  assert.equal(touchedByYou(a("idle"), a("working"), { reportsToYou: false }), false);               // a helper: not you
+  assert.equal(touchedByYou(a("idle"), a("working"), { reportsToYou: true, sentAt: 0, now: 5000 }), false); // the watcher's note
+  assert.equal(touchedByYou(a("working"), a("done"), { reportsToYou: true }), false);
+});
+
+test("joining a loop isn't news: a member that arrives already done is told nothing", () => {
+  const s0 = initState(base(), 0);
+  const joined = [...base(), T("t5", "done", L({ "omniloop.to": "t1" }))];
+  assert.deepEqual(step(s0, joined, 1).actions, []);
+  // ...but its next turn is.
+  const r = step(step(s0, joined, 1).state, put(put(joined, "t5", { turn: 2 }), "t1", { status: { state: "idle" } }), 2);
+  assert.ok(r.actions.some((a) => a.type === "send" && a.to === "t1"));
+});
+
+test("another machine's loop is watched, never typed into: its own watcher tells its agents", () => {
+  const R = (extra = {}) => ({ omniloop: "m2", ...extra });
+  const remote = () => [
+    T("m1/t1", "idle", R({ "omniloop.lead": "1" })),
+    T("m1/t2", "working", R({ "omniloop.to": "t1" })),
+    T("m1/t3", "working", R({ "omniloop.to": "t2", "omniloop.needs": "you" })),
+  ];
+  const ts = () => [...base(), ...remote()];
+  let s = initState(ts(), 0, { timers: [{ id: "a", at: 5, to: "m1/t1", text: "check" }] });
+  let r = step(s, put(put(ts(), "m1/t2", { status: { state: "blocked" } }), "m1/t3", { status: { state: "blocked" } }), 10);
+  assert.equal(r.actions.filter((a) => a.type === "send").length, 0);
+  assert.deepEqual(Object.keys(r.state.pending), []);
+  // What is for you still reaches this computer's view.
+  assert.ok(r.you.some((a) => a.address === "m1/t3" && a.loop === "m1/m2"));
+  // This computer's own loop of the same name is untouched by the remote one.
+  r = step(r.state, put(put(put(ts(), "t3", { status: { state: "done" } }), "m1/t2", { status: { state: "blocked" } }), "m1/t3", { status: { state: "blocked" } }), 11);
+  assert.deepEqual(r.state.pending, { t2: ["t3 finished its turn"] });
+});
+
+// A Claude member at a dialog before its first prompt (folder trust) never reports a status, so no stall fires.
+const starting = (address, labels, extra = {}) =>
+  T(address, null, labels, { reported: false, status_ms: null, turn: 0, created_ms: 1000, argv: ["/bin/zsh", "-lc", "exec \"$@\"", "omniloop", "claude", "task"], ...extra });
+
+test("a Claude member that never starts is told to you once, after START_MS, even when it has a parent", () => {
+  let s = initState(base(), 0);
+  const ts = [...base(), starting("t4", L({ "omniloop.to": "t2" }))];
+  let r = step(s, ts, 1000);                                          // just made: joining isn't news
+  r = step(r.state, ts, 1000 + START_MS - 1);
+  assert.deepEqual(r.actions, []);
+  r = step(r.state, ts, 1000 + START_MS);
+  assert.equal(r.actions.length, 1);
+  assert.equal(r.actions[0].type, "you");
+  assert.match(r.actions[0].text, /^omniloop m2: t4 stuck at start: .*folder trust/);
+  assert.deepEqual(step(r.state, ts, 1000 + START_MS + 5000).actions, []);   // told once
+});
+
+test("startingClaude: only a live, never-reported Claude", () => {
+  assert.equal(startingClaude(starting("a", L())), true);
+  assert.equal(startingClaude(starting("a", L(), { foreground: { argv: ["claude"] }, argv: ["sh"] })), true);
+  assert.equal(startingClaude(starting("a", L(), { argv: ["/bin/zsh", "-l"] })), false);     // a plain shell
+  assert.equal(startingClaude(starting("a", L(), { reported: true })), false);
+  assert.equal(startingClaude(starting("a", L(), { status_ms: 5 })), false);
+  assert.equal(startingClaude(starting("a", L(), { status: { state: "idle" } })), false);
+  assert.equal(startingClaude(starting("a", L(), { state: "finished" })), false);
+  assert.equal(startingClaude(starting("a", L(), { argv: ["claudette"] })), false);
+});
+
+test("sendFailed: a note typed before herdr-core failed to save is delivered, not held", () => {
+  assert.equal(sendFailed(0, ""), false);
+  assert.equal(sendFailed(1, '{"error":{"kind":"internal","message":"cannot save terminals: registry writer stopped"}}'), false);
+  assert.equal(sendFailed(1, '{"error":{"kind":"refused","message":"not idle"}}'), true);
+  assert.equal(sendFailed(null, ""), true);                          // killed on timeout
+});
+
+test("hold: the same line is held once per agent", () => {
+  const p = {};
+  hold(p, "t1", "t3 finished its turn"); hold(p, "t1", "t3 finished its turn"); hold(p, "t1", "t4 finished its turn");
+  assert.deepEqual(p, { t1: ["t3 finished its turn", "t4 finished its turn"] });
+});
+
+// ---- the feed: what the watcher says in each loop's chat (phase 2) ----
+
+const texts = (r) => r.feed.map((f) => `${f.loop}|${f.entry.from}|${f.entry.text}`);
+
+test("DW-2.1 feed: a block routed to its parent is posted once, as omniloop, in the member's loop", () => {
+  const ts = put(base(), "t3", { status: { state: "blocked", kind: "question", msg: "which db?" } });
+  let r = step(initState(base(), 0), ts, 1);
+  assert.deepEqual(texts(r), ["m2|omniloop|t3 blocked (question): which db?"]);
+  assert.equal(r.feed[0].entry.ts, 1);
+  r = step(r.state, ts, 2);
+  assert.deepEqual(r.feed, []);                                       // once across repeated steps
+  r = step(r.state, ts, 3);
+  assert.deepEqual(r.feed, []);
+});
+
+test("DW-2.1 feed: an alert for you is posted once", () => {
+  const ts = put(base(), "t1", { status: { state: "blocked", kind: "question", msg: "ship it?" } });
+  let r = step(initState(base(), 0), ts, 1);
+  assert.deepEqual(texts(r), ["m2|omniloop|t1 (lead) blocked (question): ship it?"]);
+  assert.deepEqual(step(r.state, ts, 2).feed, []);
+});
+
+test("DW-2.1 feed: a stall is posted once", () => {
+  const s = initState(base(), 0);
+  let r = step(s, base(), STALL_MS + 1);
+  assert.ok(r.feed.some((f) => /t3 stalled, no progress for 20 min/.test(f.entry.text)));
+  const n = r.feed.length;
+  assert.equal(step(r.state, base(), STALL_MS + 2).feed.length, 0);
+  assert.ok(n >= 1);
+});
+
+test("DW-2.1 feed: a due timer is posted once as 'timer for t3: …' in t3's loop, and still reaches pending", () => {
+  const ts = base();
+  const s = initState(ts, 0, { timers: [{ id: "a", at: 5, to: "t3", text: "check the build" }] });
+  assert.deepEqual(step(s, ts, 4).feed, []);                          // not due yet
+  const r = step(s, ts, 5);
+  assert.deepEqual(texts(r), ["m2|omniloop|timer for t3: check the build"]);
+  assert.deepEqual(step(r.state, ts, 6).feed, []);
+});
+
+test("DW-2.1 feed: an undeliverable note is posted (the parent became a shell)", () => {
+  const ts = [T("t1", "working", L({ "omniloop.lead": "1" })), T("t2", null, L({ "omniloop.to": "t1" })), T("t3", "working", L({ "omniloop.to": "t2" }))];
+  const s = initState(ts, 0);
+  const r = step(s, put(ts, "t3", { status: { state: "done" } }), 1);
+  assert.ok(r.actions.some((a) => a.type === "you" && a.alert.kind === "undeliverable"));
+  assert.ok(texts(r).includes("m2|omniloop|for t2 (its parent isn't an agent now): t3 finished its turn"));
+});
+
+test("DW-2.1 feed: nothing for a remote member, a remote loop, or a remote timer target; nothing at initState", () => {
+  const remoteLoop = [
+    T("m1/t1", "working", { omniloop: "x", "omniloop.lead": "1" }),
+    T("m1/t2", "working", { omniloop: "x", "omniloop.to": "m1/t1" }),
+  ];
+  const s = initState(remoteLoop, 0, { timers: [{ id: "r", at: 1, to: "m1/t2", text: "x" }] });
+  const r = step(s, put(put(remoteLoop, "m1/t2", { status: { state: "blocked", kind: "question" } }), "m1/t1", { status: { state: "blocked", kind: "question" } }), 2);
+  assert.deepEqual(r.feed, []);
+  // initState itself returns state only: no feed, and what is already true stays silent
+  const blocked = put(base(), "t3", { status: { state: "blocked", kind: "question" } });
+  assert.equal(initState(blocked, 0).feed, undefined);
+  assert.deepEqual(step(initState(blocked, 0), blocked, 1).feed, []);
+});
+
+test("feed: a timer or note for a terminal outside any loop makes no feed entry", () => {
+  const ts = [...base(), T("t9", "idle", {})];
+  const r = step(initState(ts, 0, { timers: [{ id: "z", at: 1, to: "t9", text: "hi" }] }), ts, 2);
+  assert.deepEqual(r.feed, []);
+});
+
+test("DW-2.2 a note: true timer reaches the agent without the timer: prefix, and makes no feed entry", () => {
+  const ts = put(base(), "t1", { status: { state: "idle" } });
+  const s = initState(ts, 0, { timers: [{ id: "n", at: 1, to: "t1", text: "you: hello", note: true }] });
+  const r = step(s, ts, 2);
+  assert.deepEqual(r.actions, [{ type: "send", to: "t1", text: "omniloop: you: hello", if: "idle" }]);
+  assert.deepEqual(r.feed, []);
+});
+
+test("DW-2.2 a held reply and a member note for the lead go out as one line joined by ' · '", () => {
+  const ts = base();
+  let s = initState(ts, 0, { timers: [{ id: "n", at: 1, to: "t1", text: "you: hello", note: true }] });
+  let r = step(s, put(ts, "t2", { status: { state: "done" } }), 2);   // t1 is working: both held
+  assert.deepEqual(r.actions, []);
+  r = step(r.state, put(put(ts, "t2", { status: { state: "done" } }), "t1", { status: { state: "idle" } }), 3);
+  assert.equal(r.actions.length, 1);
+  assert.equal(r.actions[0].text, "omniloop: t2 finished its turn · you: hello");
+});
+
+test("DW-2.6 a --loop scoped step leaves another loop's timer in state (so its file stays) and fires its own", () => {
+  const other = [T("t7", "idle", { omniloop: "other", "omniloop.lead": "1" })];
+  const ts = [...base(), ...other];
+  const timers = [{ id: "mine", at: 1, to: "t3", text: "a" }, { id: "theirs", at: 1, to: "t7", text: "b" }];
+  const s = initState(ts, 0, { loop: "m2", timers });
+  const r = step(s, ts, 5, { loop: "m2" });
+  assert.deepEqual(r.state.timers.map((t) => t.id), ["theirs"]);
+  assert.deepEqual(texts(r), ["m2|omniloop|timer for t3: a"]);
+  assert.ok(!r.actions.some((a) => a.to === "t7"));
+  // unscoped, the same step does fire it
+  assert.equal(step(initState(ts, 0, { timers }), ts, 5).state.timers.length, 0);
+});
+
+// ---- the watcher process, against a stub `hc events` (temp HOME and OMNILOOP_HOME; the real hc can't make terminals now) ----
+
+import { spawn } from "node:child_process";
+import { mkdtemp, mkdir, writeFile, readFile, readdir, chmod, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const BIN = join(dirname(fileURLToPath(import.meta.url)), "..", "bin", "omniloop.mjs");
+const term = (address, state, labels, extra = {}) => ({ address, state: "live", status: { state }, labels, turn: 1, created_ms: 0, ...extra });
+
+/** Run `omniloop watch <args>` until its output matches `until` (or 8 s), then stop it. Returns { out, feed, timers }. */
+async function watcher(t, args, { timers = [], until = /FEED|SEND|YOU/, settle = 400, cacheFiles = {} } = {}) {
+  const home = await mkdtemp(join(tmpdir(), "omniloop-watch-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const bin = join(home, "bin"), cache = join(home, "cache"), loopDir = join(home, "loops", "X");
+  await mkdir(bin, { recursive: true }); await mkdir(loopDir, { recursive: true }); await mkdir(join(cache, "timers"), { recursive: true });
+  await writeFile(join(loopDir, "loop.json"), JSON.stringify({ id: "X", goal: "g", dirs: [], created_ms: 1 }));
+  const terms = [term("t1", "working", { omniloop: "X", "omniloop.lead": "1" }), term("t2", "working", { omniloop: "X", "omniloop.to": "t1" }), term("t7", "idle", { omniloop: "Y", "omniloop.lead": "1" })];
+  // after the watcher is ready, t2 blocks: its note goes to the working lead t1 (held), and the block is news for the feed
+  const events = [[1500, { params: { terminal: "t2", type: "status", data: { status: { state: "blocked", kind: "question", msg: "which db?" } } } }]];
+  await writeFile(join(bin, "cfg.json"), JSON.stringify({ terms, events }));
+  await writeFile(join(bin, "hc"), `#!/usr/bin/env node
+const cfg = JSON.parse(require("fs").readFileSync(${JSON.stringify(join(bin, "cfg.json"))}, "utf8")), a = process.argv.slice(2);
+const out = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
+if (a[0] !== "events") process.exit(1);
+out({ terminals: cfg.terms });
+for (const [ms, ev] of cfg.events) setTimeout(() => out(ev), ms);
+setInterval(() => {}, 1e6);
+`);
+  await chmod(join(bin, "hc"), 0o755);
+  for (const [f, body] of Object.entries(cacheFiles)) await writeFile(join(cache, f), JSON.stringify(body));
+  for (const tm of timers) await writeFile(join(cache, "timers", `${tm.id}.json`), JSON.stringify(tm));
+  const env = { ...process.env, HOME: home, OMNILOOP_HOME: cache, PATH: `${bin}:${process.env.PATH}` };
+  delete env.HC_TERMINAL_ID;
+  const p = spawn("node", [BIN, "watch", ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
+  let out = "";
+  p.stdout.on("data", (d) => { out += d; }); p.stderr.on("data", (d) => { out += d; });
+  const exited = new Promise((r) => p.on("exit", r));
+  for (let i = 0; i < 160 && !until.test(out) && p.exitCode == null; i++) await new Promise((r) => setTimeout(r, 50));
+  await new Promise((r) => setTimeout(r, settle)); // let the ticks (and the 1.5 s block event) finish their file work
+  p.kill(); await exited;
+  const files = async (d) => (await readdir(d).catch(() => [])).filter((f) => f.endsWith(".json")).sort();
+  return { out, cache, feed: await readFile(join(loopDir, "feed.jsonl"), "utf8").catch(() => null), timers: await files(join(cache, "timers")) };
+}
+const timersFor = [{ id: "mine", at: 1, to: "t2", text: "check it" }, { id: "theirs", at: 1, to: "t7", text: "other loop's" }];
+
+test("DW-2.4 watch --loop X --dry-run logs the feed lines it would post and posts none", async (t) => {
+  const r = await watcher(t, ["--loop", "X", "--dry-run"]);
+  console.log(r.out);                                                  // shown for the report
+  assert.match(r.out, /watching loop X: 3 terminals \(dry run\)/);
+  assert.match(r.out, /FEED X t2 blocked \(question\): which db\?/);
+  assert.equal(r.feed, null);
+});
+
+test("watch --loop X (not a dry run) posts the block to X's feed once, as omniloop", async (t) => {
+  const r = await watcher(t, ["--loop", "X"], { until: /watching/, settle: 2500 });
+  const lines = (r.feed ?? "").trim().split("\n").map((l) => JSON.parse(l));
+  assert.equal(lines.length, 1);
+  assert.deepEqual({ from: lines[0].from, thread: lines[0].thread, text: lines[0].text }, { from: "omniloop", thread: null, text: "t2 blocked (question): which db?" });
+});
+
+test("DW-2.6 a --dry-run watcher (scoped or not) leaves every timer file in place", async (t) => {
+  for (const args of [["--loop", "X", "--dry-run"], ["--dry-run"]]) {
+    const r = await watcher(t, args, { timers: timersFor });
+    assert.deepEqual(r.timers, ["mine.json", "theirs.json"], args.join(" "));
+  }
+});
+
+test("DW-2.6 a --loop X watcher fires its own timer (file removed, feed line) and leaves loop Y's timer file", async (t) => {
+  const r = await watcher(t, ["--loop", "X"], { timers: timersFor, until: /watching/, settle: 1000 });
+  assert.deepEqual(r.timers, ["theirs.json"]);
+  assert.match(r.feed ?? "", /timer for t2: check it/);
+  assert.doesNotMatch(r.feed ?? "", /other loop/);
+});
+
+test("a --dry-run watcher keeps its own state file: a real watcher's state (pid, heartbeat) is never touched or created", async (t) => {
+  const real = { pid: process.pid, heartbeat: 123, loop: "X", marker: "real" };
+  for (const args of [["--loop", "X", "--dry-run"], ["--dry-run"]]) {
+    const r = await watcher(t, args, { cacheFiles: { "state-X.json": real, "state.json": real } });
+    for (const f of ["state-X.json", "state.json"]) assert.deepEqual(JSON.parse(await readFile(join(r.cache, f), "utf8")), real, `${args.join(" ")} ${f}`);
+    const dry = JSON.parse(await readFile(join(r.cache, args.includes("--loop") ? "dry-X.json" : "dry.json"), "utf8"));
+    assert.notEqual(dry.marker, "real");
+    assert.ok(dry.pid > 0 && dry.heartbeat > 123);
+  }
+});
+
+test("a dry-run watcher doesn't refuse to start because a real watcher is running, and a real one starts beside a dry one", async (t) => {
+  const live = { pid: process.pid, heartbeat: Date.now(), loop: "X" };
+  const r = await watcher(t, ["--loop", "X", "--dry-run"], { cacheFiles: { "state-X.json": live }, until: /watching|already/ });
+  assert.match(r.out, /watching loop X/);
+  const r2 = await watcher(t, ["--loop", "X"], { cacheFiles: { "dry-X.json": live }, until: /watching|already/ });
+  assert.match(r2.out, /watching loop X/);
+});

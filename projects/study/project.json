@@ -1,0 +1,52 @@
+{
+  "name": "study",
+  "description": "Turn reels, videos and podcasts into a slide deck plus a randomized practice test, published on upublish.",
+  "autostart": true,
+  "triggers": {
+    "words": [
+      "reel",
+      "reels",
+      "youtube",
+      "video",
+      "podcast",
+      "episode",
+      "instagram",
+      "tiktok",
+      "study",
+      "slides",
+      "deck",
+      "quiz",
+      "test me"
+    ],
+    "urls": [
+      "instagram.com",
+      "youtube.com",
+      "youtu.be",
+      "tiktok.com",
+      "x.com",
+      "twitter.com",
+      "podcasts.apple.com",
+      "open.spotify.com/episode",
+      "overcast.fm",
+      "pca.st"
+    ]
+  },
+  "repos": [],
+  "requires": {
+    "plugins": [
+      "sdd",
+      "upublish"
+    ],
+    "bins": [
+      "yt-dlp",
+      "ffmpeg",
+      "mlx_whisper",
+      "node"
+    ]
+  },
+  "publish": {
+    "address": "ryan",
+    "root": "recall-room",
+    "name": "Recall Room"
+  }
+}

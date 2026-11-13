@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Test</title>
+<!-- STUDY:HEAD fonts, theme-color and icon go here (copied from the deck's index.html) -->
+<link rel="stylesheet" href="style.css">
+<style>
+  .wrap { position: relative; z-index: 1; max-width: 640px; margin: 0 auto; padding: 4px var(--pad) max(32px, env(safe-area-inset-bottom)); }
+  .pipe { display: flex; gap: 4px; margin: 6px 0 22px; }
+  .pipe i { flex: 1; height: 6px; border-radius: 3px; background: var(--line); }
+  .pipe i.pass { background: var(--pass); } .pipe i.fail { background: var(--fail); } .pipe i.now { background: var(--run); }
+  .pipe i.fixed { background: repeating-linear-gradient(135deg, var(--pass) 0 4px, color-mix(in srgb, var(--pass) 45%, var(--bg-2)) 4px 8px); }
+  h1 { font-size: clamp(36px, 10vw, 60px); line-height: .98; letter-spacing: -.03em; margin: 10px 0 14px; font-weight: 800; }
+  .muted { color: var(--muted); }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 22px 0; }
+  .stats div { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+  .stats b { display: block; font-size: 26px; font-weight: 800; }
+  .stats span { font: 11px var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .rules { padding-left: 18px; color: var(--muted); margin: 0 0 24px; }
+  .rules li { margin: 4px 0; }
+  .full { width: 100%; }
+
+  .qhead { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .badge { font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: .1em; padding: 5px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .badge.again { border-color: var(--run); color: var(--run); }
+  .prompt { font-size: clamp(21px, 5.6vw, 28px); line-height: 1.22; font-weight: 700; margin: 14px 0 20px; letter-spacing: -.01em; }
+  .choices { display: grid; gap: 10px; }
+  .choice { text-align: left; font: 500 17px/1.3 var(--display); color: var(--text); background: var(--bg-2); border: 1.5px solid var(--line);
+            border-radius: 12px; padding: 17px 16px; cursor: pointer; display: flex; gap: 12px; align-items: flex-start; transition: border-color .15s, background .15s; }
+  .choice .k { font: 600 12px/1.6 var(--mono); color: var(--muted); min-width: 1.2em; }
+  .choice:hover:not(:disabled) { border-color: var(--muted); }
+  .choice:disabled { cursor: default; }
+  .choice.right { border-color: var(--pass); background: color-mix(in srgb, var(--pass) 14%, var(--bg-2)); }
+  .choice.wrong { border-color: var(--fail); background: color-mix(in srgb, var(--fail) 14%, var(--bg-2)); }
+  .choice.dim { opacity: .45; }
+  .hintrow { margin-top: 14px; min-height: 40px; }
+  .hintbtn { font: 600 13px var(--mono); color: var(--muted); background: none; border: 1.5px dashed var(--line); border-radius: 999px; padding: 8px 14px; cursor: pointer; }
+  .hint { font: 14px/1.4 var(--mono); color: var(--run); }
+  .fb { margin-top: 18px; padding: 14px 16px; border-radius: 12px; border-left: 4px solid; background: var(--bg-2); display: none; }
+  .fb.show { display: block; animation: rise .25s ease; }
+  .fb.ok { border-color: var(--pass); } .fb.no { border-color: var(--fail); }
+  .fb b { display: block; margin-bottom: 4px; }
+  .fb .ans { font-family: var(--mono); font-size: 14px; color: var(--run); display: block; margin-bottom: 4px; }
+  .slidelink { display: inline-block; margin-top: 10px; font: 600 14px var(--mono); color: var(--run); }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+  @media (prefers-reduced-motion: reduce) { .fb.show { animation: none; } }
+  .nextrow { margin-top: 18px; display: none; }
+  .nextrow.show { display: block; }
+
+  .score { font: 800 clamp(80px, 26vw, 140px)/.9 var(--display); letter-spacing: -.05em; }
+  .score small { font-size: .35em; color: var(--muted); letter-spacing: 0; }
+  .revisit { display: grid; gap: 8px; margin: 10px 0; }
+  .revisit a { display: flex; justify-content: space-between; gap: 12px; text-decoration: none; color: var(--text); background: var(--bg-2);
+               border: 1px solid var(--line); border-radius: 12px; padding: 13px 16px; }
+  .revisit a span { font: 12px var(--mono); color: var(--muted); white-space: nowrap; }
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 22px; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="home" href="index.html">← <b id="slug"></b>/test</a>
+  <a class="home" href="slides.html">slides →</a>
+</header>
+<div class="wrap" id="app" aria-live="polite"></div>
+
+<script src="bank.js"></script>
+<script src="quiz.js"></script>
+<script>
+(function () {
+  "use strict";
+  const QB = window.QuizBank;
+  const META = window.QUIZ.meta;
+  const HEAD = META.slides || [];
+  const PER = Math.min(META.per || 10, QB.BANK.length);
+  document.title = "Test · " + META.title;
+  document.getElementById("slug").textContent = META.slug;
+  const app = document.getElementById("app");
+  const KEY = META.slug + "-test-v2", RKEY = META.slug + "-round-v2";
+
+  // Stats live in localStorage; the round in progress lives in sessionStorage, so following a slide link and
+  // coming back (back button, or the test link) picks up where it left off.
+  function load() { try { return JSON.parse(localStorage.getItem(KEY)) || { best: null, rounds: 0 }; } catch (e) { return { best: null, rounds: 0 }; } }
+  function save(s) { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) {} }
+  function loadRound() { try { return JSON.parse(sessionStorage.getItem(RKEY)); } catch (e) { return null; } }
+  function saveRound() { try { sessionStorage.setItem(RKEY, JSON.stringify(round)); } catch (e) {} }
+  function dropRound() { try { sessionStorage.removeItem(RKEY); } catch (e) {} }
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const slideName = (n) => "Slide " + n + (HEAD[n - 1] ? ": " + HEAD[n - 1] : "");
+  const slideLink = (n) => "slides.html#" + n;
+
+  let round = null, locked = false;
+
+  function home() {
+    const st = load();
+    app.innerHTML =
+      '<span class="kicker"><span class="dot"></span> practice round</span>' +
+      '<h1>' + esc(META.headline) + '</h1>' +
+      '<p class="muted">' + PER + ' questions drawn at random from a bank of ' + QB.BANK.length + ', all from the slides. Two answers each. Questions, order, wording and the wrong answer change every round.</p>' +
+      '<div class="stats"><div><b>' + (st.best == null ? "–" : st.best + "/" + PER) + '</b><span>best first try</span></div>' +
+      '<div><b>' + st.rounds + '</b><span>rounds won</span></div><div><b>' + QB.BANK.length + '</b><span>in bank</span></div></div>' +
+      '<ul class="rules"><li>Miss one and it comes back later, reworded, until you get it. Every round ends in a win.</li>' +
+      '<li>Stuck? Tap <b>hint</b> to see which slide it comes from.</li><li>After each answer, jump to its slide to jog your memory.</li></ul>' +
+      '<button class="btn run full" id="start">Start round →</button>';
+    document.getElementById("start").onclick = start;
+  }
+
+  function start() {
+    round = QB.newRound(PER);
+    saveRound();
+    show();
+    window.scrollTo(0, 0);
+  }
+
+  function pipe() {
+    const ahead = round.queue.slice(round.pos).map((q) => q.id);
+    const cur = QB.done(round) ? null : QB.current(round).id;
+    let h = '<div class="pipe" aria-hidden="true">';
+    for (const id of round.ids) {
+      let c = "";
+      if (round.first[id] === true) c = "pass";
+      else if (id in round.first) c = ahead.includes(id) ? "fail" : "fixed";
+      if (id === cur && !locked) c = "now";
+      h += '<i class="' + c + '"></i>';
+    }
+    return h + "</div>";
+  }
+
+  function show() {
+    locked = false;
+    const q = QB.current(round);
+    window.__round = round; window.__q = q; // exposed for automated checks
+    const left = round.queue.length - round.pos;
+    app.innerHTML = pipe() +
+      '<div class="qhead"><span class="kicker">' + left + " to go</span>" +
+      (q.retry ? '<span class="badge again">again · reworded</span>' : '<span class="badge">' + (q.kind === "tf" ? "true or false" : "pick one") + "</span>") + "</div>" +
+      '<p class="prompt">' + esc(q.prompt) + "</p>" +
+      '<div class="choices">' + q.choices.map((c, i) =>
+        '<button class="choice" data-i="' + i + '"><span class="k">' + "AB"[i] + '</span><span>' + esc(c) + "</span></button>").join("") + "</div>" +
+      '<div class="hintrow" id="hr"><button class="hintbtn" id="hint">hint: which slide?</button></div>' +
+      '<div class="fb" id="fb"></div><div class="nextrow" id="nr"><button class="btn full" id="nx"></button></div>';
+    document.getElementById("hint").onclick = () => {
+      document.getElementById("hr").innerHTML = '<span class="hint" id="hinttext">' + esc(slideName(q.slide)) + "</span>";
+    };
+    app.querySelectorAll(".choice").forEach((b) => (b.onclick = () => choose(+b.dataset.i)));
+  }
+
+  function choose(i) {
+    if (locked) return;
+    locked = true;
+    const q = QB.current(round), ok = i === q.correct;
+    app.querySelectorAll(".choice").forEach((x, k) => {
+      x.disabled = true;
+      x.classList.add(k === q.correct ? "right" : k === i ? "wrong" : "dim");
+    });
+    QB.answer(round, ok);
+    if (QB.done(round)) record();
+    saveRound();
+    const fb = document.getElementById("fb");
+    fb.className = "fb show " + (ok ? "ok" : "no");
+    fb.innerHTML = "<b>" + (ok ? "✓ Right" : "✗ Not quite. It comes back in a bit.") + "</b>" +
+      (ok ? "" : '<span class="ans">Answer: ' + esc(q.answerText) + "</span>") + esc(q.explain) +
+      '<br><a class="slidelink" id="slidelink" href="' + slideLink(q.slide) + '">↗ ' + esc(slideName(q.slide)) + "</a>";
+    document.getElementById("hr").innerHTML = "";
+    const nx = document.getElementById("nx");
+    nx.textContent = QB.done(round) ? "Finish the round →" : "Next question →";
+    nx.onclick = () => { QB.done(round) ? finish() : show(); window.scrollTo(0, 0); };
+    document.getElementById("nr").className = "nextrow show";
+    app.querySelector(".pipe").outerHTML = pipe();
+    nx.focus({ preventScroll: true });
+  }
+
+  // Count the win as soon as the last question is answered, so leaving before "Finish" still records it.
+  function record() {
+    if (round.counted) return;
+    const st = load(), score = QB.firstTry(round);
+    round.newBest = st.best == null || score > st.best;
+    st.rounds += 1; st.best = round.newBest ? score : st.best; save(st); round.counted = true;
+  }
+
+  function finish() {
+    record();
+    const score = QB.firstTry(round), n = round.ids.length;
+    const st = load(), newBest = round.newBest;
+    dropRound();
+    const missed = Object.keys(round.misses);
+    const slides = [...new Set(round.queue.filter((q) => missed.includes(q.id)).map((q) => q.slide))].sort((a, b) => a - b);
+    const per = (s) => missed.filter((id) => round.queue.find((q) => q.id === id).slide === s).length;
+    const V = META.verdicts, pct = score / n;
+    const verdict = pct === 1 ? V[0] : pct >= 0.8 ? V[1] : pct >= 0.5 ? V[2] : V[3];
+    window.__q = null;
+    app.innerHTML = pipe() +
+      '<span class="kicker"><span class="dot pass"></span> round won · ' + n + "/" + n + " answered right</span>" +
+      '<div class="score">' + score + "<small>/" + n + " first try</small></div>" +
+      '<h1 style="font-size:clamp(26px,7vw,38px)">' + esc(verdict) + "</h1>" +
+      '<p class="muted">' + (newBest && st.rounds > 1 ? "New best! " : "") + "Best first try: " + st.best + "/" + PER + " · Rounds won: " + st.rounds + "</p>" +
+      (slides.length
+        ? '<h2 style="margin:26px 0 6px;font-size:22px">Slides to revisit</h2><div class="revisit">' + slides.map((s) =>
+            '<a href="' + slideLink(s) + '">' + esc(slideName(s)) + "<span>" + per(s) + " missed</span></a>").join("") + "</div>"
+        : '<p class="muted">Every question right on the first try. Nothing to revisit.</p>') +
+      '<div class="actions"><button class="btn run" id="again">New round ↻</button><a class="btn ghost" href="slides.html">Slides</a></div>';
+    document.getElementById("again").onclick = start;
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (e.metaKey || e.ctrlKey || e.altKey || !round || QB.done(round) && !locked) return;
+    const k = e.key.toLowerCase();
+    if (!locked && (k === "a" || k === "1")) choose(0);
+    else if (!locked && (k === "b" || k === "2")) choose(1);
+  });
+
+  round = loadRound();
+  if (round && round.queue && !QB.done(round)) show();
+  else if (round && round.queue) finish(); // finished, then left before seeing the results
+  else { round = null; home(); }
+})();
+</script>
+</body>
+</html>

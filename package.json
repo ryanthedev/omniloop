@@ -1,0 +1,11 @@
+{
+  "name": "omniloop",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "bin": {
+    "omniloop": "bin/omniloop"
+  }
+}
