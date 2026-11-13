@@ -7,6 +7,7 @@ export const KEYS = [
     ["⌘O", "the picker: find a loop or start a new one"],
     ["⌥⌘O", "the Omniloop pane (all loops, goals, tasks)"],
     ["⌘⇧U", "show or hide the docked Omniloop panel (⌘H / ⌘L move the keyboard into it)"],
+    ["⌥⌘U", "collapse the docked panel to a thin strip, or open it again"],
     ["?", "this list (in the pane, or the picker with an empty box)"],
   ]],
   ["PICKER (⌘O)", [
@@ -56,6 +57,7 @@ export const KEYS = [
     ["o", "jump to the loop's lead"],
     ["/", "filter all loops (Esc clears)"],
     ["f", "follow your terminal's loop again"],
+    ["c «", "collapse to a thin strip (it keeps the for-you count); c again, or click the strip, opens it"],
     ["Esc", "hand the keyboard back to your terminal"],
     ["click", "a folder or project: fold or unfold its files; a file: open it"],
   ]],

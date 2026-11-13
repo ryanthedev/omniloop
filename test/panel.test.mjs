@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { placeOf, onMachine, loopOfTerminal, splitLoop, allLoops, currentLoop, loopRows, allRows, step, cursorRow, keyName, initialState } from "../core/panel.js";
+import { collapseTo, forYouTotal, STRIP_PX, OPEN_PX, placeOf, onMachine, loopOfTerminal, splitLoop, allLoops, currentLoop, loopRows, allRows, step, cursorRow, keyName, initialState } from "../core/panel.js";
 
 const disk = [
   { id: "alpha", goals: [{ n: 1, text: "Ship alpha" }, { n: 2, text: "Docs" }], dirs: [{ path: "/r/alpha", machine: null }], projects: ["study"],
@@ -207,4 +207,18 @@ test("a folder the loop works on in its own copy (git worktree) carries the copy
   assert.deepEqual(row.copy, { name: "omniloop", where: "~/loops/alpha/wt" });
   assert.equal(row.branch, "alpha/work");
   assert.equal(loopRows("alpha", disk[0], null).find((r) => r.kind === "dir").copy, undefined);
+});
+
+test("c asks to collapse; collapseTo shrinks to a strip and opens to the last width", () => {
+  assert.deepEqual(step(initialState(), "c", []).action, { type: "collapse" });
+  // typed into the filter, c is a letter
+  const f = step({ ...initialState(), view: "all", filtering: true }, "c", []);
+  assert.equal(f.action, undefined); assert.equal(f.state.query, "c");
+  assert.deepEqual(collapseTo(452, null), { px: STRIP_PX, wide: 452 });
+  assert.deepEqual(collapseTo(40, 452), { px: 452, wide: 452 });
+  assert.deepEqual(collapseTo(40, null), { px: OPEN_PX, wide: null });
+  assert.deepEqual(collapseTo(null, null), { px: STRIP_PX, wide: null });
+  assert.deepEqual(collapseTo(456, null, 380), { px: STRIP_PX, wide: 380 }); // the layout's size beats a zoomed width
+  assert.deepEqual(collapseTo(456, null, 40), { px: STRIP_PX, wide: 456 });
+  assert.equal(forYouTotal([{ needsYou: 2 }, { needsYou: 0 }, {}]), 2);
 });

@@ -197,7 +197,7 @@ export function cursorRow(rows, sel) {
  * One key. key: a normalized name ("j", "down", "enter", "escape", "tab", "shift-tab", "backspace", or a typed
  * character). rows: what the current view shows. Returns { state, action? }; action is one of
  *   { type: "open-loop" } (pinned a loop), { type: "jump", terminal }, { type: "done", loop, n },
- *   { type: "leave" } (hand the keyboard back), { type: "follow" }.
+ *   { type: "leave" } (hand the keyboard back), { type: "follow" }, { type: "collapse" } (to a strip, or back).
  */
 export function step(state, key, rows) {
   const s = { ...state, sel: { ...state.sel } };
@@ -244,6 +244,7 @@ export function step(state, key, rows) {
       s.view = v === "loop" ? "all" : "loop"; return { state: s };
     case "/": s.view = "all"; s.filtering = true; return { state: s };
     case "f": s.pinned = null; s.sel.loop = 0; return { state: s, action: { type: "follow" } };
+    case "c": return { state: s, action: { type: "collapse" } }; // the mod shrinks or restores its block
     case "escape":
       if (s.query) return { state: { ...s, query: "" } };
       return { state: s, action: { type: "leave" } };
@@ -280,4 +281,26 @@ export function keyName(e) {
   if (k === "space") return " ";
   const c = e?.key_char ?? (k.length === 1 ? (m.shift ? k.toUpperCase() : k) : null);
   return c && c.length === 1 ? c : null;
+}
+
+/** Below this width (px) the panel draws as a strip: too narrow for rows. */
+export const STRIP_BELOW = 120;
+/** The strip's width, and the width it opens to when it doesn't know the last one. */
+export const STRIP_PX = 40, OPEN_PX = 380;
+
+/**
+ * The size to give the panel's block when you collapse or open it. width: what it's drawn at now, in layout px
+ * (null before the first layout); blockPx: the block's size in the layout, if it says; wide: the width it had
+ * before it last collapsed (null if unknown). Returns { px, wide }: the new block size, and the width to remember.
+ * The layout's own size wins over the drawn width, which zoom can skew (opening wider each time).
+ */
+export function collapseTo(width, wide, blockPx = null) {
+  if (width != null && width < STRIP_BELOW) return { px: wide ?? OPEN_PX, wide };
+  const now = blockPx != null && blockPx >= STRIP_BELOW ? blockPx : width;
+  return { px: STRIP_PX, wide: now != null ? Math.max(280, Math.round(now)) : wide };
+}
+
+/** For the strip: how many agents wait on you, across every loop. */
+export function forYouTotal(loops) {
+  return (loops ?? []).reduce((n, l) => n + (l.needsYou ?? 0), 0);
 }

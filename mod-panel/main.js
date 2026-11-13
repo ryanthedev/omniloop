@@ -13,9 +13,9 @@
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
-import { terminals, focused, theme, run, exec, home, readTextFile, props, layout, nextCommand, shared } from "herdr";
+import { terminals, focused, theme, run, exec, home, readTextFile, props, layout, nextCommand, shared, settings } from "herdr";
 import { buildView } from "./core/view.js";
-import { onMachine, loopOfTerminal, splitLoop, allLoops, currentLoop, loopRows, allRows, chooserRows, cursorRow, step, keyName, initialState } from "./core/panel.js";
+import { onMachine, loopOfTerminal, splitLoop, allLoops, currentLoop, loopRows, allRows, chooserRows, cursorRow, step, keyName, initialState, collapseTo, forYouTotal, STRIP_BELOW } from "./core/panel.js";
 import { shq } from "./core/loopdir.js";
 import { KEYS } from "./core/keys.js";
 import { Help, isHelpKey } from "./help/help.js";
@@ -41,6 +41,8 @@ export default class OmniloopPanel extends View {
     this.lastTerm = null;    // the last terminal you were in: focus in a mod (this one) keeps it
     this.note = null;        // one line about the last action ("done: …", or an error)
     this.cands = [];         // the add chooser's candidates: [{ value, text, note }]
+    this.width = null;       // drawn width in layout px; under STRIP_BELOW the panel draws as a strip
+    this.wide = null;        // the width before it last collapsed, to open back to
     // ? (or the ? chip) shows every Omniloop control, this panel's first in the list (core/keys.js).
     this.keysHelp = new Help(KEYS, { title: "Omniloop controls", mod: MOD, width: 520 });
     this.handle = cx.focus_handle(); // never focused in init: a dock must not steal the keyboard
@@ -49,6 +51,7 @@ export default class OmniloopPanel extends View {
       for (;;) {
         const c = await nextCommand();
         // Test hooks too: "help" opens the controls, "add-project" / "add-dir" the chooser for the loop shown.
+        if (c === "collapse") { this.collapse(); cx.notify(); continue; } // keys.json: ⌥⌘U, from anywhere
         if (!["focus", "all", "loop", "help", "add-project", "add-dir"].includes(c)) continue;
         if (props()?.dock && this.hidden()) run("layout.show", { id: this.blockId() ?? "omniloop-dock" });
         if (c === "all" || c === "loop") this.s = { ...this.s, view: c };
@@ -132,7 +135,7 @@ export default class OmniloopPanel extends View {
     const walk = (n, h) => {
       if (!n || typeof n !== "object" || found) return;
       const hid = h || Boolean(n.hidden);
-      if (n.content?.mod === MOD) { found = { id: n.id, hidden: hid }; return; }
+      if (n.content?.mod === MOD) { found = { id: n.id, hidden: hid, px: n.size?.px ?? null }; return; }
       for (const c of n.children ?? []) walk(c, hid);
     };
     try { walk(layout(), false); } catch {}
@@ -154,6 +157,18 @@ export default class OmniloopPanel extends View {
     look();
   }
 
+  zoom() { const z = Number(settings()?.zoom); return z > 0 ? z : 1; }
+  collapsed() { return this.width != null && this.width < STRIP_BELOW; }
+
+  // Shrink the block to a strip, or open it back to the width it had. Herdr keeps the size.
+  collapse() {
+    const b = this.findBlock();
+    const { px, wide } = collapseTo(this.width, this.wide, b?.px ?? null);
+    this.wide = wide;
+    try { run("layout.resize", { id: b?.id ?? "omniloop-dock", px }); }
+    catch (e) { this.note = `couldn't resize the panel: ${String(e?.message ?? e).slice(0, 80)}`; }
+  }
+
   leave() {
     if (this.lastTerm) run("pane.focus", { terminal: this.lastTerm });
   }
@@ -161,6 +176,7 @@ export default class OmniloopPanel extends View {
   act(a, ctx, cx) {
     if (!a) return;
     if (a.type === "leave") return this.leave();
+    if (a.type === "collapse") return this.collapse();
     if (a.type === "jump" && a.terminal) return run("pane.focus", { terminal: a.terminal });
     if (a.type === "note") { this.note = a.text; return; }
     if (a.type === "open-file") {
@@ -377,19 +393,47 @@ export default class OmniloopPanel extends View {
     return v_flex().flex_1().min_h(0).child(filter).child(list);
   }
 
+  // Collapsed: a thin strip. It keeps what needs you in sight; a click (or c, or ⌥⌘U) opens the panel again.
+  stripView(t, ctx, typing) {
+    const n = forYouTotal(ctx.loops);
+    const cur = ctx.loops.find((l) => l.id === ctx.cur);
+    return v_flex().id(`ps-${this.uid}`).flex_1().min_h(0).w_full().pt(8).gap(10).items_center().cursor_pointer()
+      .when(typing, (x) => x.border_l(2).border_color(t.accent))
+      .on_click((_e, cx) => { this.collapse(); cx.notify(); })
+      .child(div().text_size(14).text_color(t.dim).child("»"))
+      .child(div().text_size(15).text_color(cur?.live ? t.accent : t.dim).child("◎"))
+      .when(n > 0, (el) => el.child(div().min_w(22).h(20).px(5).rounded(10).bg(t.blocked).flex().items_center().justify_center()
+        .text_size(11.5).font_semibold().text_color(t.background).child(String(n))));
+  }
+
   render(_cx) {
     const t = theme();
     const typing = this.handle.is_focused();
     const ctx = this.context(true);
+    const sized = (el) => el.on_size_change((size, cx) => {
+      const w = size.width / this.zoom(), was = this.collapsed();
+      this.width = w;
+      if (this.collapsed() !== was) cx.notify();
+    });
+    if (this.collapsed()) {
+      const strip = v_flex().id(`omniloop-panel-${this.uid}`).size_full().bg(t.surface ?? t.background).text_color(t.foreground)
+        .track_focus(this.handle).on_key_down((e, cx) => this.key(e, cx))
+        .child(this.stripView(t, ctx, typing));
+      return sized(strip);
+    }
     const bar = h_flex().px(8).h(32).flex_none().gap(4).items_center().border_b(1).border_color(t.border ?? t.input)
       .child(div().flex_none().pr(4).text_size(12.5).font_semibold().text_color(t.foreground).child("Omniloop"))
       .child(this.tab(t, "1 Loop", "loop", true, typing))
       .child(this.tab(t, `2 All (${ctx.loops.length})`, "all", true, typing))
       .child(div().flex_1())
       .child(div().text_size(10).text_color(typing ? t.accent : t.dim).child(typing ? "keys: on" : "keys: off"))
-      .child(this.keysHelp.button());
+      .child(this.keysHelp.button())
+      .child(div().id(`pcol-${this.uid}`).flex_none().w(22).h(22).rounded(5).flex().items_center().justify_center().cursor_pointer()
+        .text_size(13).text_color(t.dim).hover((x) => x.bg(t.hover))
+        .on_click((_e, cx) => { this.collapse(); cx.notify(); })
+        .child("«"));
     const hint = typing
-      ? (this.s.view === "all" ? "j/k move · ⏎ open · / filter · o lead · tab view · esc back" : "j/k move · ⏎ open/jump · x finish · a/p add · ? help · esc back")
+      ? (this.s.view === "all" ? "j/k move · ⏎ open · / filter · o lead · tab view · esc back" : "j/k move · ⏎ open/jump · x finish · a/p add · c collapse · esc back")
       : "click a row, or focus the panel for keys";
     const foot = v_flex().flex_none().px(10).py(4).gap(1).border_t(1).border_color(t.border ?? t.input)
       .when(Boolean(this.note), (el) => el.child(div().truncate().text_size(11).text_color(t.muted).child(this.note)))
@@ -403,7 +447,7 @@ export default class OmniloopPanel extends View {
       .on_key_down((e, cx) => this.key(e, cx));
     // Herdr's own UI font, not the terminal's: a monospace font spaces out punctuation ("CLAUDE .md") and makes
     // dense rows hard to read. The picker and the other omniloop mods draw in the UI font too.
-    return root
+    return sized(root)
       .child(bar)
       .child(this.s.adding ? this.chooserView(t, ctx) : this.s.view === "all" ? this.allView(t, ctx, typing) : this.loopView(t, ctx, typing))
       .child(foot)
