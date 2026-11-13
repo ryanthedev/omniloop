@@ -11,7 +11,7 @@ import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LABEL, buildLoops, statusOf } from "../core/omniloop.js";
-import { initState, step, parseDuration, touchedByYou, sendFailed, hold } from "../core/watch.js";
+import { initState, step, parseDuration, touchedByYou, sendFailed, hold, withoutReplies } from "../core/watch.js";
 import { validId, loopHome, newManifest, addDir, dirsOn, claudeMd, updateClaudeMd, memberArgv, parseAliasWords, sharedWith, LOOPS_DIR } from "../core/loopdir.js";
 import { matchProjects, addProject, projectLaunch, withProjectsBlock } from "../core/projects.js";
 import { goalsOf, openGoals, setGoal, addGoal, finishGoal, withGoalBlock, goalNote } from "../core/goals.js";
@@ -788,7 +788,7 @@ async function cmdWatch({ flags }) {
           reject(new Error(`hc send exit ${code}`));
         });
       });
-      deliver(a.to, { from: "omniloop", text: a.text.replace(/^omniloop: /, ""), replyTo: null, hcSend: (to) => hcSend(to, a.text) })
+      deliver(a.to, { from: "omniloop", text: a.text.replace(/^omniloop: /, ""), replyTo: null, hcSend: (to) => hcSend(to, withoutReplies(a.text).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")) })
         .then((d) => { if (d.via === "socket") log("SOCKET", a.to, `(${d.to})`); })
         .catch((e) => {
           // Refused (it started working or blocked meanwhile), timed out, or unreachable: hold the note for the next stop.

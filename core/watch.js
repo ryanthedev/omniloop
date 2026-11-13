@@ -84,9 +84,19 @@ function line(a, t, rec) {
   const msg = t?.status && typeof t.status === "object" ? t.status.msg : t?.message;
   const what = a.kind === "blocked" ? `blocked${t?.status?.kind ? ` (${t.status.kind})` : ""}` : a.kind === "stalled" ? `stalled, ${a.why}` : a.kind === "stuck" ? `stuck at start: ${a.why}` : "finished its turn";
   const reply = a.kind === "done" ? lastReply(rec) : null;
-  if (reply) return `${a.address}${role} finished its turn: ${reply}`;
+  // Quoted, so the reader sees an agent's words relayed, not omniloop's; withoutReplies() strips it for typing.
+  if (reply) return `${a.address}${role} finished its turn, last reply: «${reply.replace(/[«»]/g, '"')}»`;
   const tail = msg ? `: ${String(msg).replace(/\s+/g, " ").slice(0, MSG_MAX)}` : "";
   return `${a.address}${role} ${what}${tail}`;
+}
+
+/** How long a finished turn waits for its Stop hook's record before it is told without the reply. */
+export const REPLY_WAIT_MS = 10_000;
+
+function replyPending(a, t, rec, now) {
+  if (a.kind !== "done" || !rec || lastReply(rec)) return false; // no record at all: this agent has no hook; never wait
+  const since = t?.status_ms ?? t?.event_ms ?? null;
+  return since != null && now - since < REPLY_WAIT_MS;
 }
 
 /** The last reply of a turn record, when that record is of a turn that has ended (not one still running). */
@@ -131,8 +141,11 @@ export function step(prev, terminals, now, { loop = null, turns = {} } = {}) {
     const k = keyOf(a, a.kind === "stalled" || a.kind === "stuck" ? a.last : byAddr.get(a.address)?.turn);
     live.add(k);
     if (state.told[k]) continue;
+    const rec = turns[a.address];
+    // The Stop hook writes the reply as the turn ends; the watcher can see "done" first. Wait for it, a little.
+    if (replyPending(a, byAddr.get(a.address), rec, now)) { live.add(k); continue; }
     state.told[k] = true;
-    const rec = turns[a.address], l = line(a, byAddr.get(a.address), rec);
+    const l = line(a, byAddr.get(a.address), rec);
     const text = `omniloop ${a.loop}: ${l}`;
     if (!remote(a.address) && !remote(a.to)) post(a.loop, l);
     // The agent already told its parent this turn (omniloop send / hc send): a "finished" note would say it twice.
@@ -219,4 +232,12 @@ export function touchedByYou(prev, next, { reportsToYou = false, sentAt = null, 
   if (seen(next) != null && seen(next) !== seen(prev)) return true;
   const was = statusOf(prev), is = statusOf(next);
   return reportsToYou && is === "working" && (was === "idle" || was === "done") && !(sentAt != null && now - sentAt < OWN_SEND_MS);
+}
+
+/**
+ * A note as it may be typed into a terminal (hc send): without the agents' relayed replies. Typed text reads as
+ * the user's own words, so an agent's free text never goes that way; only a labelled socket message carries it.
+ */
+export function withoutReplies(text) {
+  return String(text ?? "").replace(/, last reply: «[^»]*»/g, "");
 }

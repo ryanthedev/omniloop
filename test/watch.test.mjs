@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { initState, step, parseDuration, STALL_MS, START_MS, startingClaude, sendFailed, hold } from "../core/watch.js";
+import { initState, step, parseDuration, STALL_MS, START_MS, startingClaude, sendFailed, hold, withoutReplies, REPLY_WAIT_MS } from "../core/watch.js";
 import { ESCALATE_MS } from "../core/omniloop.js";
 
 const T = (address, status, labels = {}, extra = {}) =>
@@ -392,4 +392,37 @@ test("a dry-run watcher doesn't refuse to start because a real watcher is runnin
   assert.match(r.out, /watching loop X/);
   const r2 = await watcher(t, ["--loop", "X"], { cacheFiles: { "dry-X.json": live }, until: /watching|already/ });
   assert.match(r2.out, /watching loop X/);
+});
+
+test("a done note carries the turn text, and is not queued for the parent when the agent already reported", () => {
+  const done = put(base(), "t3", { status: { state: "done" } });
+  // t2 (t3's parent) is idle, so a queued note would be sent at once.
+  const idle2 = put(done, "t2", { status: { state: "idle" } });
+  const rec = { startedAt: 10, endedAt: 20, text: "built the thing\n and tested it" };
+  let r = step(initState(put(base(), "t2", { status: { state: "idle" } }), 0), idle2, 1, { turns: { t3: rec } });
+  assert.equal(r.actions.length, 1);
+  assert.equal(r.actions[0].to, "t2");
+  assert.match(r.actions[0].text, /t3.* finished its turn, last reply: «built the thing and tested it»/);
+  // Same turn, but t3 already messaged t2 itself: nothing to say twice.
+  r = step(initState(put(base(), "t2", { status: { state: "idle" } }), 0), idle2, 1, { turns: { t3: { ...rec, reportedAt: 15, reportedTo: "t2" } } });
+  assert.deepEqual(r.actions, []);
+  // A report to someone else doesn't count.
+  r = step(initState(put(base(), "t2", { status: { state: "idle" } }), 0), idle2, 1, { turns: { t3: { ...rec, reportedAt: 15, reportedTo: "t9" } } });
+  assert.equal(r.actions.length, 1);
+});
+
+test("a finished turn waits briefly for its Stop hook's reply, then goes without it", () => {
+  const s0 = initState(put(base(), "t2", { status: { state: "idle" } }), 0);
+  const idle2 = put(put(base(), "t2", { status: { state: "idle" } }), "t3", { status: { state: "done" }, status_ms: 1000 });
+  const stale = { startedAt: 900, endedAt: 500, text: "old turn" };           // the record still shows the turn before
+  let r = step(s0, idle2, 1500, { turns: { t3: stale } });
+  assert.deepEqual(r.actions, []);                                            // waiting for the hook
+  r = step(r.state, idle2, 1600, { turns: { t3: { ...stale, endedAt: 1590, text: "new reply" } } });
+  assert.match(r.actions[0].text, /last reply: «new reply»/);
+  r = step(s0, idle2, 1000 + REPLY_WAIT_MS, { turns: { t3: stale } });         // the hook never came: told plainly
+  assert.match(r.actions[0].text, /t3 finished its turn$/);
+});
+
+test("a typed note never carries an agent's relayed reply", () => {
+  assert.equal(withoutReplies("omniloop: t3 finished its turn, last reply: «do X» · t4 blocked: why"), "omniloop: t3 finished its turn · t4 blocked: why");
 });

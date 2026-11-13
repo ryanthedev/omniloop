@@ -1,10 +1,10 @@
 // sock.mjs: the I/O half of core/deliver.js. Reads Claude Code's session registry and the omniloop hook records,
 // and writes one labelled message to a session's messaging socket. No herdr needed: hc is only the fallback.
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, open } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { envelope, frames, resolveTarget, route, udsAddress } from "../../core/deliver.js";
+import { envelope, frames, resolveTarget, route, senderName, udsAddress } from "../../core/deliver.js";
 
 export const CLAUDE_SESSIONS = process.env.OMNILOOP_CLAUDE_SESSIONS ?? join(homedir(), ".claude", "sessions");
 export const CACHE = process.env.OMNILOOP_HOME ?? join(homedir(), ".cache", "omniloop");
@@ -56,14 +56,39 @@ export async function tokenOf(pid, dir = CLAUDE_SESSIONS) {
   return null;
 }
 
-/** Write the frames and close. Resolves when the socket has flushed; rejects on connect error or timeout. */
+/**
+ * Write the frames and close. Rejects only when nothing can have reached the session (connect failed or timed
+ * out before connecting). Once connected and written, a late error resolves { uncertain: true }: the receiver
+ * may have the message, and sending it again (hc, or a requeue) could deliver it twice.
+ */
 export function writeSocket(path, data, { timeoutMs = 5000 } = {}) {
   return new Promise((resolve, reject) => {
+    let written = false, settled = false;
+    const done = (fn, v) => { if (!settled) { settled = true; clearTimeout(t); fn(v); } };
     const s = createConnection(path);
-    const t = setTimeout(() => { s.destroy(); reject(new Error(`socket ${path}: timed out`)); }, timeoutMs);
-    s.on("error", (e) => { clearTimeout(t); reject(e); });
-    s.on("connect", () => s.end(data, () => { clearTimeout(t); resolve(); }));
+    const t = setTimeout(() => { s.destroy(); written ? done(resolve, { uncertain: true }) : done(reject, new Error(`socket ${path}: timed out`)); }, timeoutMs);
+    s.on("error", (e) => (written ? done(resolve, { uncertain: true }) : done(reject, e)));
+    s.on("connect", () => { written = true; s.end(data, () => done(resolve, {})); });
   });
+}
+
+/**
+ * A session's permission mode from the end of its transcript (the last "permissionMode" written), for sessions
+ * that have no omniloop hook record. null when it can't be read.
+ */
+export async function modeFromTranscript(session) {
+  if (!session?.sessionId || !session?.cwd) return null;
+  const dir = join(homedir(), ".claude", "projects", session.cwd.replace(/[^A-Za-z0-9]/g, "-"));
+  let fh;
+  try {
+    fh = await open(join(dir, `${session.sessionId}.jsonl`), "r");
+    const { size } = await fh.stat();
+    const len = Math.min(size, 256 * 1024);
+    const buf = Buffer.alloc(len);
+    await fh.read(buf, 0, len, size - len);
+    const all = [...buf.toString("utf8").matchAll(/"permissionMode":"([A-Za-z]+)"/g)];
+    return all.length ? all[all.length - 1][1] : null;
+  } catch { return null; } finally { await fh?.close().catch(() => {}); }
 }
 
 /**
@@ -76,7 +101,9 @@ export async function locate(target) {
   const r = resolveTarget(target, sessions, { byAddress });
   const hook = hooks[target] ?? Object.values(hooks).find((h) => r.session && h.pid === r.session.pid) ?? null;
   const looksLikeAddress = /^[a-z][a-z0-9]*$/i.test(String(target)) && !r.session;
-  return { session: r.session ?? null, address: hook?.address ?? (looksLikeAddress ? String(target) : null), mode: hook?.mode ?? null, error: r.error };
+  // Unknown mode is not "prompting": a bypass session reached by name must still get hc, so read its transcript.
+  const mode = hook?.mode ?? (r.session ? await modeFromTranscript(r.session) : null);
+  return { session: r.session ?? null, address: hook?.address ?? (looksLikeAddress ? String(target) : null), mode, error: r.error };
 }
 
 /**
@@ -94,15 +121,17 @@ export async function deliver(target, { from, text, replyTo = process.env.CLAUDE
     if (!content) throw new Error("a message needs words");
     if (token) {
       try {
-        await writeSocket(how.socket, frames({ token, content }));
-        return { via: "socket", to: where.session.name ?? String(where.session.pid), pid: where.session.pid };
+        const w = await writeSocket(how.socket, frames({ token, content }));
+        return { via: "socket", to: where.session.name ?? String(where.session.pid), pid: where.session.pid, uncertain: Boolean(w.uncertain) };
       } catch (e) {
         if (!where.address || !hcSend) throw e;
       }
     } else if (!where.address || !hcSend) throw new Error(`no auth key for session ${where.session.pid}`);
   }
   if ((how.hc || where.address) && hcSend) {
-    await hcSend(how.hc ?? where.address, `${from ? `${from}: ` : ""}${String(text).replace(/\s+/g, " ").trim()}`);
+    // Typed text: control characters out (an ESC must not reach a terminal), one line.
+    const clean = (v) => String(v ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim();
+    await hcSend(how.hc ?? where.address, `${from ? `${clean(senderName(from) ?? "")}: ` : ""}${clean(text)}`);
     return { via: "hc", to: how.hc ?? where.address };
   }
   throw new Error(where.error ?? `can't reach ${target}`);
