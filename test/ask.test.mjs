@@ -173,3 +173,13 @@ test("goal-hook: outside a loop (unlabelled terminal, no loop.json) prints nothi
     assert.equal(existsSync(join(home, ".cache")), false);
   } finally { rmSync(home, { recursive: true, force: true }); }
 }));
+
+test("ask-hook: a hanging `hc get` is cut off within the hook's budget; exit 0, no output, no label", () => rig(({ run, seen, calls }) => {
+  const bin = join(dirname(calls), "bin");
+  writeFileSync(join(bin, "hc"), `#!/bin/sh\nif [ "$1" = get ]; then sleep 10; fi\nprintf '%s\\n' "$*" >> "${calls}"\n`);
+  const t0 = Date.now();
+  const r = run(prompt("hello"));
+  assert.equal(r.status, 0); assert.equal(r.stdout, "");
+  assert.ok(Date.now() - t0 < 4000, "took too long");
+  assert.deepEqual(seen(), []);
+}));

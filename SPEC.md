@@ -105,8 +105,8 @@ Each loop shows when you last interacted with it ("you 5m"), and the view ranks 
 
 herdr-core records no "last key a person pressed", so "interacted" means either of:
 
-- **Focus:** you were in its terminal. Nothing records this any more: no mod writes `omniloop.withYou`; only readers remain
-  (`mod-picker`, `mod-panel`, `mod-status`), and the watcher's own record (`withYou` in `state.json`) comes from the prompt label below.
+- **Focus:** you were in its terminal. The main mod records it (`trackFocus` in `mod/main.js`, at most every 10 s) into the
+  shared `omniloop.withYou`, which the picker, panel and status read.
 - **Prompted:** you typed a prompt into it. The UserPromptSubmit hook (`bin/ask-hook.mjs`, shipped in `plugin/hooks`)
   sets the label `omniloop.you=<ms>` on the terminal it runs in, unless the prompt is empty or not a person's
   (starts with `omniloop:` (omniloop's own notes), `<hc from=`, `<cross-session-message` or "Another Claude session sent a message"). The
@@ -116,11 +116,11 @@ The plugin may also be loaded by the user's own `claude` alias (`--plugin-dir <r
 Claude, loop or not. Claude Code registers a plugin's hooks once per plugin name (verified: the same directory twice,
 or a copy under another path with the same name, runs each hook once), so omniloop's own flag does not double them.
 `ask-hook` and `goal-hook` do nothing (no label, no file, no output) unless the terminal carries the `omniloop`
-label; a hand-started Claude in a loop terminal therefore counts as you typing, with the same rules as above.
+label (`goal-hook` also acts when the session's cwd holds a `loop.json`: a Claude started inside a loop folder counts as in the loop); a hand-started Claude in a loop terminal therefore counts as you typing, with the same rules as above.
 `session-hook` is not gated: `omniloop send` needs its session and turn records for any Claude.
 
 Status changes (an agent going idle/done to working) and `herdr.seen` are **not** signals: agents message each
-other directly, and each such message looked like you. A member without the plugin loaded shows no time from you.
+other directly, and each such message looked like you. A member without the plugin loaded shows a time from you only by focus.
 
 The watcher keeps its record in `state.json` (`withYou`, entries older than 30 days dropped); the view takes
 the newer of the two.

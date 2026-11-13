@@ -29,9 +29,9 @@ try {
   // The plugin may be loaded by the user's own alias, in any Claude: only a loop member's terminal (label `omniloop`)
   // gets labels. A failed or unreadable `hc get` counts as "not a member".
   try {
-    if (!isLoopTerminal(JSON.parse(execFileSync("hc", ["get", "--json", id], { timeout: 2000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })))) quiet();
+    if (!isLoopTerminal(JSON.parse(execFileSync("hc", ["get", "--json", id], { timeout: 1500, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })))) quiet();
   } catch { quiet(); }
-  const label = (...kv) => execFileSync("hc", ["label", id, ...kv], { stdio: "ignore", timeout: 4000 });
+  const label = (...kv) => execFileSync("hc", ["label", id, ...kv], { stdio: "ignore", timeout: 2500 });
   if (input.hook_event_name === "Stop") {
     let text = typeof input.last_assistant_message === "string" ? input.last_assistant_message : "";
     if (!text && input.transcript_path) text = lastAssistantText(readFileSync(input.transcript_path, "utf8"));
