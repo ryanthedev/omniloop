@@ -322,21 +322,64 @@ async function cmdNew({ flags, rest }) {
   const task = typeof flags.task === "string" ? flags.task : autostart
     ? `You lead the loop ${id}. Read CLAUDE.md, run \`omniloop brief\`, then do the goal with your project's skill: ${manifest.goal}`
     : `You lead the loop ${id}. Read CLAUDE.md, run \`omniloop brief\`, then ask the user what to do first.`;
+  await startLead(id, manifest, task, { dry: flags["dry-run"] });
+}
+
+/** The tab or space `herdr-app do` just made, found by the ids it printed: its first terminal, or null. */
+async function madeTerminal(made) {
+  if (made?.terminal) return made.terminal;
+  try {
+    const { stdout } = await run("herdr-app", ["ls"], { maxBuffer: 16 << 20 });
+    for (const sp of JSON.parse(stdout).spaces ?? []) {
+      if (made?.tab) { const tb = (sp.tabs ?? []).find((t) => t.id === made.tab); if (tb) return tb.terminals?.[0]?.terminal ?? null; }
+      else if (made?.space && sp.id === made.space) return sp.tabs?.[0]?.terminals?.[0]?.terminal ?? null;
+    }
+  } catch {}
+  return null;
+}
+
+/**
+ * Start a loop's lead on this computer and label it. In the loop's space when one is open here (a new tab named
+ * "lead"), else in a new space named after the loop. The lead's terminal comes from what `herdr-app do` printed,
+ * never from a name lookup (an old space with the loop's name may still be open).
+ */
+async function startLead(id, manifest, task, { dry = false } = {}) {
+  const home = loopHome(homedir(), id);
   const argv = memberArgv({ shell: SHELL, claudeArgv: await claudeLaunch(), ...(await launchOf(manifest)), task, binDir: BIN });
-  if (flags["dry-run"]) return console.log(JSON.stringify({ "space.new": { name: id, folder: home, argv } }, null, 1));
-  await run("herdr-app", ["do", "space.new", JSON.stringify({ name: id, folder: home, argv })]);
-  // Find the lead's terminal (the new space's first) and label it.
+  const sp = await loopSpace(id);
+  const [cmd, args] = sp ? ["tab.new", { space: sp.id, name: "lead", folder: home, argv }] : ["space.new", { name: id, folder: home, argv }];
+  if (dry) return console.log(JSON.stringify({ [cmd]: args }, null, 1));
+  const { stdout } = await run("herdr-app", ["do", cmd, JSON.stringify(args)]);
+  let made = null;
+  try { made = JSON.parse(stdout); } catch {}
   let lead = null;
   for (let i = 0; i < 40 && !lead; i++) {
-    const sp = await loopSpace(id);
-    lead = sp?.tabs?.[0]?.terminals?.[0]?.terminal ?? null;
+    lead = await madeTerminal(made);
     if (!lead) await new Promise((r) => setTimeout(r, 250));
   }
-  if (!lead) die(`space ${id} was made, but its lead didn't appear; label it yourself: omniloop join ${id} --lead --terminal <t>`);
+  if (!lead) die(`${cmd} ran for ${id}, but its lead didn't appear; label it yourself: omniloop join ${id} --lead --terminal <t>`);
   const kv = [`${LABEL.loop}=${id}`, `${LABEL.lead}=1`, "omniloop.job=lead"];
   if (manifest.goal) kv.push(`${LABEL.goal}=${manifest.goal}`);
   await hc(["label", lead, ...kv], { json: false });
   console.log(`lead ${lead} in space ${id}`);
+}
+
+/**
+ * omniloop revive <id>: start a fresh lead for a loop nobody is running in (Enter on an idle loop in ⌘O). It catches
+ * up from the loop's own notes and asks; it never redoes a project's autostart job. A loop with a running lead
+ * gets nothing new: its lead's address is printed instead. This computer's loops only.
+ */
+async function cmdRevive({ flags, rest }) {
+  const id = rest[0];
+  if (!validId(id)) die("usage: omniloop revive <id> [--dry-run]");
+  const manifest = await manifestOf(id);
+  if (!manifest) die(`loop ${id} has no folder here (${loopHome(homedir(), id)})`);
+  const built = buildLoops(await allTerminals());
+  const live = built.loops.find((l) => l.id === id);
+  if (live?.lead) return console.log(`lead ${live.lead} in space ${id} (already running)`);
+  const task = typeof flags.task === "string" ? flags.task
+    : `You lead the loop ${id}, picking it up again: nobody was running in it. Read CLAUDE.md (goal and decisions), run \`omniloop brief\`, \`omniloop task ls\` and \`omniloop feed\`, and \`engram search "${id}"\`. Then tell the user in a few lines where things stand and ask what to do next.`;
+  await startLead(id, manifest, task, { dry: flags["dry-run"] });
 }
 
 function resolvePath(p) {
@@ -846,10 +889,10 @@ const argv = argvRaw;
 const parsed = parseArgs(argv);
 const table = {
   ls: cmdLs, new: cmdNew, goal: cmdGoal, task: cmdTask, say: cmdSay, feed: cmdFeed, reply: cmdReply, "add-dir": cmdAddDir, project: cmdProject, start: cmdStart, join: cmdJoin, leave: cmdLeave, "needs-you": cmdNeedsYou, shared: cmdShared,
-  timer: cmdTimer, handoff: cmdHandoff, watch: cmdWatch, index: cmdIndex, propose: cmdPropose, brief: async () => console.log(BRIEF),
+  timer: cmdTimer, handoff: cmdHandoff, watch: cmdWatch, index: cmdIndex, propose: cmdPropose, revive: cmdRevive, brief: async () => console.log(BRIEF),
 };
 if (!table[cmd]) {
-  console.log("omniloop new | propose | index | goal | task | say | feed | reply | add-dir | shared | project | ls | start | join | leave | needs-you | timer | handoff | watch [--loop id] [--dry-run] | brief");
+  console.log("omniloop new | revive | propose | index | goal | task | say | feed | reply | add-dir | shared | project | ls | start | join | leave | needs-you | timer | handoff | watch [--loop id] [--dry-run] | brief");
   process.exit(cmd ? 1 : 0);
 }
 await table[cmd](parsed).catch((e) => die(e.stderr?.toString().trim() || e.message));

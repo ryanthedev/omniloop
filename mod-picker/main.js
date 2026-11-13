@@ -106,10 +106,22 @@ export default class OmniloopPicker extends View {
 
   // ---- loops ----
 
-  open(entry) {
-    if (!entry.lead) { this.error = `Nobody is running in ${entry.id} right now (its folder: ~/loops/${entry.id}).`; return; }
-    this.close();
-    run("pane.focus", { terminal: entry.lead });
+  open(entry, cx) {
+    if (entry.lead) { this.close(); run("pane.focus", { terminal: entry.lead }); return; }
+    // Nobody is running in it: start a fresh lead that catches up from the loop's notes (omniloop revive).
+    // Only this computer's loops: another machine's loop is never started or read from here.
+    if (entry.machine) { this.error = `Nobody is running in ${entry.key}; start it on ${entry.machine}.`; return; }
+    if (this.reviving) return;
+    this.reviving = entry.id; this.error = `Starting a fresh lead in ${entry.id}…`;
+    cx?.spawn(async (cx) => {
+      try {
+        const r = await exec(`${BIN}/omniloop`, ["revive", entry.id], { timeout: 60000 });
+        const lead = r.code === 0 ? leadAddress(r.stdout) : null;
+        if (lead) { this.close(); run("pane.focus", { terminal: lead }); return; }
+        this.error = (r.stderr || r.stdout || `omniloop revive exited ${r.code}`).trim();
+      } catch (e) { this.error = String(e?.message ?? e); }
+      this.reviving = null; cx.notify();
+    });
   }
 
   /** Jump to pin `slot`'s lead and close (the popup the leader opens). */
@@ -258,12 +270,12 @@ export default class OmniloopPicker extends View {
     this.error = null;
     if (this.step === "ask") {
       if (!r) return;
-      if (r.kind === "loop") return this.open(r.entry);
+      if (r.kind === "loop") return this.open(r.entry, cx);
       return this.startNew(r.goal ?? "", cx);
     }
     if (this.step === "machine") return r && this.pickMachine(r.name, cx);
     if (this.step === "goal") {
-      if (r?.kind === "loop") return this.open(r.entry);
+      if (r?.kind === "loop") return this.open(r.entry, cx);
       const g = this.query.trim();
       if (!g) { this.error = "Say what this loop is for."; return; }
       if (g !== this.fresh.goal || !this.fresh.proposal && !this.fresh.pending) { this.fresh.goal = g; this.fresh.edited = false; this.propose(cx); }
@@ -366,7 +378,7 @@ export default class OmniloopPicker extends View {
   loopRow(t, r, on, i) {
     const e = r.entry;
     const n = e.members.length;
-    const when = e.running ? (e.ago ? `you ${e.ago}` : "you: never") : (e.touched ? `idle · ${ago(e.touched, Date.now())}` : "idle");
+    const when = e.running ? (e.ago ? `you ${e.ago}` : "you: never") : (e.touched ? `idle ${ago(e.touched, Date.now())} · Enter starts a lead` : "idle · Enter starts a lead");
     return h_flex().id(`pk-${e.key}`).h(60).px(18).gap(14).items_center().rounded(12).cursor_pointer()
       .bg(on ? t.raised : t.background).border(1).border_color(on ? t.accent : t.background)
       .on_click((_e, cx) => { this.at = i; this.enter(cx); })

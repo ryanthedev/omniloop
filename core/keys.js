@@ -14,6 +14,7 @@ export const KEYS = [
     ["↑ ↓", "move"],
     ["ctrl-n ctrl-p", "move (next / previous)"],
     ["Enter", "jump to a loop's lead (pinned first, then the loops you talked to last)"],
+    ["Enter", "on an idle loop (nobody running): start a fresh lead that catches up and asks you"],
     ["⌘P", "pin or unpin the loop under the cursor (numbered 1-9)"],
     ["⌘↑ ⌘↓", "move a pinned loop up or down"],
     ["⌘Enter", "start a new loop from what you typed"],
