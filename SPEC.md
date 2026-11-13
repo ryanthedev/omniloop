@@ -107,8 +107,8 @@ herdr-core records no "last key a person pressed", so "interacted" means either 
 
 - **Focus:** you were in its terminal (the view records it, every 15 s at most, kept in the mod's storage).
 - **Prompted:** you typed a prompt into it. The UserPromptSubmit hook (`bin/ask-hook.mjs`, shipped in `plugin/hooks`)
-  sets the label `omniloop.you=<ms>` on the terminal it runs in, unless the prompt is empty or another agent's
-  message (starts with `<hc from=`, `<cross-session-message` or "Another Claude session sent a message"). The
+  sets the label `omniloop.you=<ms>` on the terminal it runs in, unless the prompt is empty or not a person's
+  (starts with `omniloop:` (omniloop's own notes), `<hc from=`, `<cross-session-message` or "Another Claude session sent a message"). The
   watcher records the time when that label changes (`touchedByYou` in `core/watch.js`).
 
 Status changes (an agent going idle/done to working) and `herdr.seen` are **not** signals: agents message each
@@ -129,6 +129,8 @@ Not colours. A row, a loop and the status bar say what is waiting, counts first,
 | `asked you` | finished its turn with a question (`omniloop.ask=1`, from the Stop hook: last lines end with "?", or a "What you need to do" line), or blocked with herdr kind `question` |
 | `finished` | finished its turn, nothing asked |
 | `stalled` | watcher-only: no progress for 20 min, or stuck at start |
+| `not delivered` | a note to that agent couldn't be delivered (`undeliverable`) |
+| `needs you` | any other kind of alert for you (never shown as "finished") |
 
 e.g. "1 needs approval · 2 asked you". `needsYou` stays the plain count.
 

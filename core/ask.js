@@ -23,8 +23,9 @@ export function lastAssistantText(jsonl) {
   return "";
 }
 
-/** Is this prompt something a person typed? Not empty, not another agent's message (hc note, socket message). */
+/** Is this prompt something a person typed? Not empty, not omniloop's or another agent's message: the watcher's
+ *  and goal/task notes ("omniloop: ..."), an hc note (`<hc from=`), a socket or cross-session message. */
 export function isHumanPrompt(prompt) {
   const p = String(prompt ?? "").trimStart();
-  return p !== "" && !p.startsWith("<hc from=") && !p.startsWith("<cross-session-message") && !p.startsWith("Another Claude session sent a message");
+  return p !== "" && !p.startsWith("omniloop:") && !p.startsWith("<hc from=") && !p.startsWith("<cross-session-message") && !p.startsWith("Another Claude session sent a message");
 }

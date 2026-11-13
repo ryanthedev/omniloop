@@ -1,6 +1,6 @@
 // view.js: what the omniloop pane shows, as plain data. Pure; the mod only draws it.
 
-import { buildLoops, alerts, loopView, forYouKind, FOR_YOU_WORDS, LABEL } from "./omniloop.js";
+import { buildLoops, alerts, loopView, forYouKind, forYouCounts, forYouLabel, FOR_YOU_WORDS, LABEL } from "./omniloop.js";
 
 /** The watcher counts as running when its state file was written this recently (it ticks every 15 s). */
 export const WATCHER_FRESH_MS = 45_000;
@@ -59,7 +59,9 @@ export function buildView(terminals, watcher, now, withYou = {}) {
     for (const r of l.roots) walk(r, r === l.lead || !l.lead ? 0 : 1);
     // The loop's last time with you: any member you interacted with.
     const last = known(Math.max(...l.members.map((m) => lastOf(m.address))));
-    return { id: l.id, goal: l.goal, lead: l.lead, needsYou: l.needsYou, forYouCounts: l.forYouCounts, forYouLabel: l.forYouLabel, handling: l.handling, status: l.status, warnings: l.warnings, rows,
+    // The same alerts the row chips show (routed plus the watcher's extras), matched by member, not by the alert's loop field.
+    const counts = forYouCounts(all.filter((a) => a.to === "you" && by.has(a.address)).map((a) => forYouKind(a, termOf.get(a.address))));
+    return { id: l.id, goal: l.goal, lead: l.lead, needsYou: l.needsYou, forYouCounts: counts, forYouLabel: forYouLabel(counts), handling: l.handling, status: l.status, warnings: l.warnings, rows,
       lastWithYou: last, ago: ago(last, now) };
   });
   // Most recently with you first; loops you never touched last, those that need you first among them.

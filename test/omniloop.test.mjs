@@ -221,7 +221,7 @@ test("for-you words: approval, asked, finished, stalled; counts first, joined wi
   assert.equal(forYouKind({ kind: "stalled" }), "stalled");
   assert.equal(forYouKind({ kind: "stuck" }), "stalled");
   const c = forYouCounts(["approval", "asked", "asked", "finished", "bogus"]);
-  assert.deepEqual(c, { approval: 1, asked: 2, finished: 1, stalled: 0 });
+  assert.deepEqual(c, { approval: 1, asked: 2, finished: 1, stalled: 0, undelivered: 0, other: 0 });
   assert.equal(forYouLabel(c), "1 needs approval · 2 asked you · 1 finished");
   assert.equal(forYouLabel(forYouCounts([])), "");
   assert.equal(forYouLabel(forYouCounts(["stalled"])), "1 stalled");
@@ -234,6 +234,15 @@ test("loopView carries forYouCounts and forYouLabel; needsYou unchanged", () => 
   const built = buildLoops(ts);
   const [l] = loopView(built, alerts(built));
   assert.equal(l.needsYou, 2);
-  assert.deepEqual(l.forYouCounts, { approval: 1, asked: 1, finished: 0, stalled: 0 });
+  assert.deepEqual(l.forYouCounts, { approval: 1, asked: 1, finished: 0, stalled: 0, undelivered: 0, other: 0 });
   assert.equal(l.forYouLabel, "1 needs approval · 1 asked you");
+});
+
+test("forYouKind: only a done terminal is 'finished'; unknown kinds say 'needs you'; undeliverable says 'not delivered'", () => {
+  assert.equal(forYouKind({ kind: "undeliverable" }), "undelivered");
+  assert.equal(forYouKind({ kind: "whatever" }), "other");
+  assert.equal(forYouKind({ kind: "whatever" }, { labels: { "omniloop.ask": "1" } }), "other");
+  assert.equal(forYouKind({ kind: "done" }), "finished");
+  const c = forYouCounts(["undelivered", "other", "other"]);
+  assert.equal(forYouLabel(c), "1 not delivered · 2 needs you");
 });

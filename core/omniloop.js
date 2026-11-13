@@ -227,23 +227,26 @@ export function trackBlocked(prev, terminals, now) {
 }
 
 /** The words for what is for you, in the order they are listed. */
-export const FOR_YOU_WORDS = { approval: "needs approval", asked: "asked you", finished: "finished", stalled: "stalled" };
+export const FOR_YOU_WORDS = { approval: "needs approval", asked: "asked you", finished: "finished", stalled: "stalled", undelivered: "not delivered", other: "needs you" };
 
 /**
  * Which word an alert for you gets: "approval" (blocked on a permission or auth prompt: the agent can't continue),
  * "asked" (blocked with herdr kind "question", or finished its turn with a question: its Stop hook set
- * omniloop.ask), "finished" (finished its turn, nothing asked), "stalled" (watcher-only: stalled, or stuck at start).
+ * omniloop.ask), "finished" (done: finished its turn, nothing asked), "stalled" (watcher-only: stalled, or stuck at
+ * start), "undelivered" (a note to that agent couldn't be delivered), "other" (any other kind: shown as "needs you").
  * t: the alert's terminal (for its labels), when known.
  */
 export function forYouKind(a, t = null) {
   if (a.kind === "stalled" || a.kind === "stuck") return "stalled";
   if (a.kind === "blocked") return kindOf(t) === "question" ? "asked" : "approval";
+  if (a.kind === "undeliverable") return "undelivered";
+  if (a.kind !== "done") return "other";
   return isOn(t?.labels?.[LABEL.ask]) ? "asked" : "finished";
 }
 
-/** Counts per word from a list of kinds: { approval, asked, finished, stalled }. */
+/** Counts per word from a list of kinds: { approval, asked, finished, stalled, undelivered, other }. */
 export function forYouCounts(kinds = []) {
-  const c = { approval: 0, asked: 0, finished: 0, stalled: 0 };
+  const c = Object.fromEntries(Object.keys(FOR_YOU_WORDS).map((k) => [k, 0]));
   for (const k of kinds) if (k in c) c[k]++;
   return c;
 }

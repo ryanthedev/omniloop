@@ -82,3 +82,16 @@ test("view rows carry a forYouLabel word; loops carry counts", () => {
   assert.equal(v.loops[0].forYouLabel, "1 asked you");
   assert.equal(v.loops[0].rows[0].forYou, "the lead"); // forYou keeps meaning why
 });
+
+test("loop forYouCounts match the row chips: routed plus the watcher's extras, needsYou unchanged", () => {
+  const terms = [T("t1", "working", { omniloop: "q", "omniloop.lead": "1" }), T("t2", "done", { omniloop: "q", "omniloop.to": "t1", "omniloop.notify": "me" })];
+  // An extra stall without a loop field still counts for the loop of its member.
+  const w = { heartbeat: 1000, you: [{ address: "t1", to: "you", kind: "stalled", why: "x" }] };
+  const [l] = buildView(terms, w, 2000).loops;
+  assert.deepEqual(l.rows.map((r) => r.forYouLabel), ["stalled", "finished"]);
+  assert.equal(l.forYouLabel, "1 finished · 1 stalled");
+  assert.equal(l.needsYou, 1); // as before: only alerts carrying this loop's id
+  const none = buildView(terms, null, 2000).loops[0];
+  assert.equal(none.needsYou, 1);
+  assert.equal(none.forYouLabel, "1 finished");
+});
