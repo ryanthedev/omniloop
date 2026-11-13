@@ -39,9 +39,13 @@ export function modeClass(permissionMode) {
   return permissionMode === "bypassPermissions" ? "bypass" : "prompting";
 }
 
-/** The message body: control characters dropped (newlines kept), trimmed, capped. null when empty. */
+/**
+ * The message body: control characters dropped (newlines kept), trimmed, capped. null when empty.
+ * The envelope tag inside a body is broken (a "‹" for its "<"), so a body can't close the envelope and fake
+ * a second message from someone else.
+ */
 export function body(text) {
-  const b = Array.from(String(text ?? "").replace(/\r\n?/g, "\n").replace(CONTROL, "").trim()).slice(0, MAX_BODY).join("").trim();
+  const b = Array.from(String(text ?? "").replace(/\r\n?/g, "\n").replace(CONTROL, "").replace(new RegExp(`<(/?)\\s*${TAG}`, "gi"), "‹$1" + TAG).trim()).slice(0, MAX_BODY).join("").trim();
   return b || null;
 }
 
@@ -133,7 +137,6 @@ export function alreadyReported(rec, to) {
 
 /** From a Bash command, the target of an `hc send` or `omniloop send` (first one), or null. */
 export function sentTo(command) {
-  const m = String(command ?? "").match(/(?:^|[;&|(]\s*|\s)(?:hc|omniloop)\s+send\s+(?:--\S+\s+(?:\S+\s+)?)*?([A-Za-z0-9_./-]+)/);
-  if (!m) return null;
-  return m[1].startsWith("-") ? null : m[1];
+  const m = String(command ?? "").match(/(?:^|[;&|(]\s*|\s)(?:hc|omniloop)\s+send\s+(?:--\S+\s+(?:\S+\s+)?)*?([A-Za-z0-9_./][A-Za-z0-9_./-]*)/);
+  return m ? m[1] : null;
 }

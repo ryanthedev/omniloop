@@ -18,6 +18,7 @@ import { goalsOf, openGoals, setGoal, addGoal, finishGoal, withGoalBlock, goalNo
 import { feedEntry, feedLine, parseFeed, replyPlan, FEED_FILE } from "../core/feed.js";
 import { proposeArgs, checkProposal, fallbackProposal, identityTerms } from "../core/intake.js";
 import { userInfo, hostname } from "node:os";
+import { deliver, liveSessions, hookRecords, turnRecord } from "./lib/sock.mjs";
 import { YOU, addTask, finishTask, giveTask, openTasks, taskLines, taskNote, tasksOf } from "../core/tasks.js";
 
 const run = promisify(execFile);
@@ -699,7 +700,9 @@ const BRIEF = `omniloop: you are in a loop (a piece of work with one lead). Comm
   omniloop shared                         other loops in this loop's folders, and their leads (tell them before a change)
   omniloop project ls | project add <project>      reusable context (skills, tools, notes) for a kind of work
   omniloop handoff <file>                 at ~60% context: write <file>, run this, then stop
-  hc send <t> "<text>"                    answer a helper; hc read <t> to see its screen
+  omniloop send <t> "<text>"              message a helper or your lead (arrives labelled as you, not as the user)
+  omniloop sessions                       Claude sessions you can send to (address, name, pid)
+  hc read <t>                             see a helper's screen
 Rules: end your turn when you wait; the watcher types a one-line note into you when a helper blocks,
 finishes or stalls ("omniloop: t3 blocked (question): ..."). Never poll, sleep or loop on hc wait.
 Only the lead (and needs-you) reaches the user; answer your helpers' questions yourself.`;
@@ -752,7 +755,10 @@ async function cmdWatch({ flags }) {
     const files = await loadTimers();
     const known = new Set(state.timers.map((t) => t.id));
     for (const f of files) if (!known.has(f.id)) state.timers.push(f);
-    const r = step(state, [...terms.values()], Date.now(), { loop });
+    // Each member's last turn (its Stop hook's record): finished-turn notes carry the reply, and skip what it already said.
+    const turns = {};
+    await Promise.all([...terms.keys()].map(async (a) => { const t = await turnRecord(a); if (t) turns[a] = t; }));
+    const r = step(state, [...terms.values()], Date.now(), { loop, turns });
     // Timers that fired are gone from state: remove their files.
     const left = new Set(r.state.timers.map((t) => t.id));
     // (A dry run only looks: it must not eat a timer file the real watcher still has to deliver.)
@@ -768,18 +774,27 @@ async function cmdWatch({ flags }) {
       log("SEND", a.to, a.text);
       sentAt[a.to] = Date.now();
       if (quiet) continue;
-      const p = spawn("hc", ["send", ...(a.if ? ["--if", a.if] : []), a.to, a.text], { stdio: ["ignore", "pipe", "pipe"] });
-      let out = "";
-      p.stdout.on("data", (d) => { out += d; });
-      p.stderr.on("data", (d) => { out += d; });
-      const kill = setTimeout(() => p.kill(), SEND_TIMEOUT_MS);
-      // Refused (it started working or blocked meanwhile) or timed out: hold the note for the next stop.
-      p.on("exit", (code) => {
-        clearTimeout(kill);
-        if (!sendFailed(code, out)) { if (code !== 0) log("SENT", a.to, `(hc send exit ${code}, but it was typed: ${out.trim().slice(0, 100)})`); return; }
-        log("REQUEUE", a.to, `(hc send exit ${code})`);
-        hold(state.pending, a.to, a.text.replace(/^omniloop: /, ""));
+      // A Claude session with a messaging socket gets the note as a message from "omniloop" (not typed as you);
+      // anything else (no socket, a bypass session, another program) gets it typed by hc send, as before.
+      const hcSend = (to, text) => new Promise((resolve, reject) => {
+        const p = spawn("hc", ["send", ...(a.if ? ["--if", a.if] : []), to, text], { stdio: ["ignore", "pipe", "pipe"] });
+        let out = "";
+        p.stdout.on("data", (d) => { out += d; });
+        p.stderr.on("data", (d) => { out += d; });
+        const kill = setTimeout(() => p.kill(), SEND_TIMEOUT_MS);
+        p.on("exit", (code) => {
+          clearTimeout(kill);
+          if (!sendFailed(code, out)) { if (code !== 0) log("SENT", to, `(hc send exit ${code}, but it was typed: ${out.trim().slice(0, 100)})`); return resolve(); }
+          reject(new Error(`hc send exit ${code}`));
+        });
       });
+      deliver(a.to, { from: "omniloop", text: a.text.replace(/^omniloop: /, ""), replyTo: null, hcSend: (to) => hcSend(to, a.text) })
+        .then((d) => { if (d.via === "socket") log("SOCKET", a.to, `(${d.to})`); })
+        .catch((e) => {
+          // Refused (it started working or blocked meanwhile), timed out, or unreachable: hold the note for the next stop.
+          log("REQUEUE", a.to, `(${String(e.message ?? e).slice(0, 100)})`);
+          hold(state.pending, a.to, a.text.replace(/^omniloop: /, ""));
+        });
     }
     await persist(r.you);
   };
@@ -887,7 +902,36 @@ async function cmdPropose({ flags, rest }) {
 const [cmd, ...argvRaw] = process.argv.slice(2);
 const argv = argvRaw;
 const parsed = parseArgs(argv);
+
+// ---- messages between sessions -------------------------------------------------------------
+
+// An agent's message to another session: it arrives as "Message from @<you>", not as if the user typed it.
+// Works without herdr: <to> is an hc address, a Claude session name (omniloop sessions), a pid or a session id.
+async function cmdSend({ flags, rest }) {
+  const [to, ...words] = rest;
+  if (!to || !words.length) die('usage: omniloop send <to> "<text>"   (<to>: address, session name, pid; see omniloop sessions)');
+  let from = typeof flags.from === "string" ? flags.from : me();
+  if (!from && process.env.CLAUDE_CODE_MESSAGING_SOCKET) from = (await liveSessions()).find((x) => x.messagingSocketPath === process.env.CLAUDE_CODE_MESSAGING_SOCKET)?.name ?? null;
+  const hcSend = (addr, text) => run("hc", ["send", addr, text], { timeout: SEND_TIMEOUT_MS }).catch((e) => {
+    if (sendFailed(e.code, `${e.stdout ?? ""}${e.stderr ?? ""}`)) throw new Error(`hc send to ${addr} failed`);
+  });
+  try {
+    const d = await deliver(to, { from: from ?? "agent", text: words.join(" "), hcSend });
+    console.log(`sent to ${d.to} (${d.via === "socket" ? "message" : "typed"})`);
+  } catch (e) { die(`not sent: ${e.message ?? e}`); }
+}
+
+// Claude sessions on this computer that omniloop can send to.
+async function cmdSessions() {
+  const [ss, hooks] = await Promise.all([liveSessions(), hookRecords()]);
+  const addrOf = new Map(Object.values(hooks).map((h) => [h.pid, h.address]));
+  const rows = ss.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+    .map((x) => `${addrOf.get(x.pid) ?? "-"}\t${x.name ?? "-"}\t${x.pid}\t${x.status ?? "?"}\t${x.messagingSocketPath ? "socket" : "no socket"}\t${x.cwd ?? ""}`);
+  console.log(rows.length ? ["address\tname\tpid\tstatus\tvia\tcwd", ...rows].join("\n") : "no Claude sessions running");
+}
+
 const table = {
+  send: cmdSend, sessions: cmdSessions,
   ls: cmdLs, new: cmdNew, goal: cmdGoal, task: cmdTask, say: cmdSay, feed: cmdFeed, reply: cmdReply, "add-dir": cmdAddDir, project: cmdProject, start: cmdStart, join: cmdJoin, leave: cmdLeave, "needs-you": cmdNeedsYou, shared: cmdShared,
   timer: cmdTimer, handoff: cmdHandoff, watch: cmdWatch, index: cmdIndex, propose: cmdPropose, revive: cmdRevive, brief: async () => console.log(BRIEF),
 };

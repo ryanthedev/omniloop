@@ -9,6 +9,7 @@
 
 import { buildLoops, alerts, trackBlocked, statusOf, loopKey, machineOf, LABEL } from "./omniloop.js";
 import { feedEntry } from "./feed.js";
+import { alreadyReported, turnText } from "./deliver.js";
 
 /** Working with no event for this long counts as stalled (also catches a session stuck at a dialog). */
 export const STALL_MS = 20 * 60 * 1000;
@@ -77,23 +78,34 @@ export function initState(terminals, now, { loop = null, timers = [] } = {}) {
   return state;
 }
 
-function line(a, t) {
+// A finished turn carries the agent's own last reply (from its Stop hook's turn record), not just "finished".
+function line(a, t, rec) {
   const role = t?.labels?.[LABEL.lead] ? " (lead)" : "";
   const msg = t?.status && typeof t.status === "object" ? t.status.msg : t?.message;
   const what = a.kind === "blocked" ? `blocked${t?.status?.kind ? ` (${t.status.kind})` : ""}` : a.kind === "stalled" ? `stalled, ${a.why}` : a.kind === "stuck" ? `stuck at start: ${a.why}` : "finished its turn";
+  const reply = a.kind === "done" ? lastReply(rec) : null;
+  if (reply) return `${a.address}${role} finished its turn: ${reply}`;
   const tail = msg ? `: ${String(msg).replace(/\s+/g, " ").slice(0, MSG_MAX)}` : "";
   return `${a.address}${role} ${what}${tail}`;
 }
 
+/** The last reply of a turn record, when that record is of a turn that has ended (not one still running). */
+function lastReply(rec) {
+  if (!rec || !Number.isFinite(rec.endedAt)) return null;
+  if (Number.isFinite(rec.startedAt) && rec.endedAt < rec.startedAt) return null;
+  return turnText(rec.text);
+}
+
 /**
  * One step. Returns { state, actions, you, feed }.
+ * opts.turns: { [address]: turn record } from the session hook (core/deliver.js), for finished-turn text and dedupe.
  * actions: [{ type: "send", to, text, if }]   a note for an agent that has stopped (`if`: hc send --if)
  *          [{ type: "you", alert, text }]      newly for you (the view plays the sound for these)
  * you: every alert currently for you (the view lists them)
  * feed: [{ loop, entry }] what to post to each loop's chat feed, once (never for another machine's members or loops)
  * opts.loop also scopes timers: only those aimed at a terminal in that loop fire; the rest stay untouched.
  */
-export function step(prev, terminals, now, { loop = null } = {}) {
+export function step(prev, terminals, now, { loop = null, turns = {} } = {}) {
   const ts = scoped(terminals, loop);
   const state = {
     told: { ...prev.told },
@@ -120,11 +132,14 @@ export function step(prev, terminals, now, { loop = null } = {}) {
     live.add(k);
     if (state.told[k]) continue;
     state.told[k] = true;
-    const text = `omniloop ${a.loop}: ${line(a, byAddr.get(a.address))}`;
-    if (!remote(a.address) && !remote(a.to)) post(a.loop, line(a, byAddr.get(a.address)));
+    const rec = turns[a.address], l = line(a, byAddr.get(a.address), rec);
+    const text = `omniloop ${a.loop}: ${l}`;
+    if (!remote(a.address) && !remote(a.to)) post(a.loop, l);
+    // The agent already told its parent this turn (omniloop send / hc send): a "finished" note would say it twice.
+    if (a.kind === "done" && a.to !== "you" && alreadyReported(rec, a.to)) continue;
     if (a.to === "you") actions.push({ type: "you", alert: a, text });
     else if (remote(a.to)) continue;
-    else (state.pending[a.to] ??= []).push(line(a, byAddr.get(a.address)));
+    else (state.pending[a.to] ??= []).push(l);
   }
   // Forget told keys that are no longer true, so the same thing happening again is news again.
   for (const k of Object.keys(state.told)) if (!live.has(k)) delete state.told[k];
