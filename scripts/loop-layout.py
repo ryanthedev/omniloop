@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Build Herdr's loops layout from another layout (the source is never changed): the tab bar becomes
-loop-tabs, pane headers become loop-pane, and the status bar gets a loop-status block in place of
-the source's team block (it showed the same who-reports-to-whom facts).
+loop-tabs and pane headers become loop-pane. The status bar gets no loop-status block: a stale
+loop-status or team block is dropped from it, and every other child is left as it is.
 Usage: loop-layout.py <source layout.json> <loops layout.json>"""
 import json, sys
 
 src, dest = sys.argv[1], sys.argv[2]
 SWAP = {"tabs": "loop-tabs", "pane": "loop-pane"}
-STATUS = {"id": "loop-status", "type": "block", "size": {"px": 900}, "content": {"mod": "loop-status"}}
 doc = json.load(open(src))
 changed = []
 
@@ -19,10 +18,9 @@ def walk(node):
             c["mod"] = SWAP[c["mod"]]
         if node.get("id") == "status-bar" and isinstance(node.get("children"), list):
             kids = [k for k in node["children"] if k.get("id") not in ("team", "loop-status")]
-            at = next((i + 1 for i, k in enumerate(kids) if k.get("id") == "time"), 0)
-            kids.insert(at, STATUS)
-            node["children"] = kids
-            changed.append("status bar: loop-status (team block dropped)")
+            if len(kids) != len(node["children"]):
+                node["children"] = kids
+                changed.append("status bar: stale loop-status/team block dropped")
         for v in node.values():
             walk(v)
     elif isinstance(node, list):

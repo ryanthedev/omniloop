@@ -29,7 +29,7 @@ cp core/*.js "$PICK/core/"
 printf 'export const BIN = %s;\n' "\"$(pwd)/bin\"" > "$PICK/config.js"
 echo "installed to $PICK"
 herdr-app check "$PICK"
-# The pane header and the status bar block (layouts name "loop-pane" for pane headers, "loop-status" for a status block).
+# The pane header mod (layouts name "loop-pane"), and the optional loop-status mod (installed, but the loops layout does not use it).
 for m in pane status; do
   D="$HERDR_APP_HOME/mods/loop-$m"
   mkdir -p "$D/core"
