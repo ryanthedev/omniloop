@@ -104,7 +104,7 @@ const at = (e, ms) => ({ ...e, timestamp: new Date(ms).toISOString() });
 test("givenBy: every prompt since the previous turn ended", () => {
   assert.deepEqual(givenBy([typed("hi"), peer("t1mb")]), { you: true, from: ["t1mb"] });
   assert.deepEqual(givenBy([at(peer("t1mb"), 1000), at(typed("can you check?"), 3000)], 2000), { you: true, from: [] });
-  // The lead's task, then a person's line mid-turn: both count (the lead's is not hidden).
+  // The coordinator's task, then a person's line mid-turn: both count (the coordinator's is not hidden).
   assert.deepEqual(givenBy([at(peer("t1mb"), 3000), at(typed("also this"), 4000)], 2000), { you: true, from: ["t1mb"] });
   assert.deepEqual(givenBy([typed('<hc from="t11">read the brief</hc>')]), { you: false, from: ["t11"] });
   assert.deepEqual(givenBy([typed("omniloop: t1mc finished its turn")]), { you: false, from: ["omniloop"] });

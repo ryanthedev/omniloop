@@ -66,6 +66,7 @@ Everything can be renamed, edited or deleted from the CLI, so you can just tell 
 | `omniloop new --temp [--goal "…"]` | A temporary loop (`"temp": true` in `loop.json`; the id defaults to `tmp-<time>`). Agents start without `ENGRAM_TOKEN`/`ENGRAM_ADDR`, with Engram's write tools disallowed, and CLAUDE.md tells them to keep no memory. It ends on `omniloop rm` (always purged), or by itself: the watcher deletes it once its last agent is gone (2 min grace), or after a day with no agents. Unmerged work keeps it alive. Checked in a real session: an agent's Bash has no Engram credentials and `engram` can't connect. Not scrubbed: a watcher's own log (`watch.log`, if you redirect it) can hold note text. |
 | `omniloop task edit N "…"` / `reopen N` / `rm N` / `move N <loop>` | Reword, reopen, delete or move a task. |
 | `omniloop goal edit N "…"` | Reword an open goal. |
+| `omniloop bootstrap [<loop>]` | (Re)apply harness config to a loop folder (also done by `new`, `add-dir`, `rm-dir`, `rename`): `.claude/settings.json` (`permissions.additionalDirectories`), `.codex/config.toml` (`writable_roots`, in an omniloop-marked block), `AGENTS.md` as a link to `CLAUDE.md`, and the loop's trust entry in `~/.codex/config.toml` (only when `~/.codex` exists; `rm` removes it, `rename` moves it). A real `AGENTS.md` is never replaced. |
 | `omniloop rm-dir <path>` / `project rm <name>` | Take a context folder (and its worktree) or a project out of a loop. |
 
 ## Projects
