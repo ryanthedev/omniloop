@@ -792,7 +792,9 @@ const BRIEF = `omniloop: you are in a loop (a piece of work with one lead). Comm
   hc read <t>                             see a helper's screen
 Rules: end your turn when you wait; the watcher types a one-line note into you when a helper blocks,
 finishes or stalls ("omniloop: t3 blocked (question): ..."). Never poll, sleep or loop on hc wait.
-Only the lead (and needs-you) reaches the user; answer your helpers' questions yourself.`;
+Only the lead (and needs-you) reaches the user; answer your helpers' questions yourself.
+Don't ask what you can decide: when one option is recommended or obvious, take it and say which. Ask the user
+only for what is theirs (credentials, spending, anything public, a real choice between goals).`;
 
 // ---- rename, remove, temporary loops (core/lifecycle.js has the rules) ---------------------------
 
