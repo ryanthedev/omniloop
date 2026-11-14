@@ -99,10 +99,10 @@ function contextBlock(manifest) {
 // Names no other loop: who shares a folder changes, so \`omniloop shared\` looks it up live.
 const SHARED_RULES = `### Other loops may work here too
 
-These folders can be shared with other loops, at the same time as you. \`omniloop shared\` lists them and their leads.
+These folders can be shared with other loops, at the same time as you. \`omniloop shared\` lists them and who coordinates each.
 
-- **Before a change, say so:** run \`omniloop shared\`; if another loop is in that folder, tell its lead which files
-  you'll touch (\`omniloop send <lead> "…"\`), and answer such notes from them. Once per change, not per edit.
+- **Before a change, say so:** run \`omniloop shared\`; if another loop is in that folder, tell its coordinator which files
+  you'll touch (\`omniloop send <coordinator> "…"\`), and answer such notes from them. Once per change, not per edit.
 - **In a git repo, use your own copy:** when a folder above names your own copy (a git worktree), work there and
   land it as it says. Otherwise work on a \`<loop>/<topic>\` branch (or a \`git worktree\`), not on the checkout
   others use. Merge only with the tests passing.
@@ -138,10 +138,10 @@ function memoryBlock(manifest) {
 
 Your Engram rules are in your global instructions; in this loop also:
 
-- **Recall by loop:** start with \`engram search "${manifest.id} <topic>"\`, then the repo or problem. Hits are leads; check them.
+- **Recall by loop:** start with \`engram search "${manifest.id} <topic>"\`, then the repo or problem. Hits are hints; check them.
 - **Tag what you write:** \`engram ingest --event-id ${manifest.id}-<topic>-<date> --source "loop ${manifest.id}" --text "…"\`,
-  so the next member of this loop finds it. Only verified results, as always.
-- **Decisions belong here too:** the lead copies loop decisions into the Decisions section below.
+  so the next session in this loop finds it. Only verified results, as always.
+- **Decisions belong here too:** the coordinator copies loop decisions into the Decisions section below.
 
 `;
 }
@@ -150,7 +150,7 @@ Your Engram rules are in your global instructions; in this loop also:
 const TEMP_MEMORY = `## Temporary loop: no memory
 
 This loop is temporary. When the user says they're done, run \`omniloop rm\`: it deletes this folder, the
-sessions' transcripts and their prompt history. It also ends by itself once its last member is gone.
+sessions' transcripts and their prompt history. It also ends by itself once its last session is gone.
 
 - **Never write memory:** no \`engram ingest\`, no memory files, no notes outside this folder. Engram is off here.
 - **Code still lands normally:** commits in a context folder are the user's work, not memory; finish or say what's left.
@@ -163,28 +163,37 @@ export function claudeMd(manifest) {
 
 ${manifest.goal ? `**Goal:** ${manifest.goal}` : "**Goal:** (not set)"}
 
-You are a member of the omniloop \`${manifest.id}\`. Run \`omniloop brief\` once for the commands and rules.
+This is the omniloop \`${manifest.id}\`. Run \`omniloop brief\` once for the commands and rules.
+
+## How to work
+
+The main agent only coordinates for the user and writes no code itself. It dispatches subagents:
+
+- **Build:** \`code-foundations:build-agent\`, on Sonnet.
+- **Review:** \`code-foundations:post-gate-agent\`, on Opus. An independent review of every build before it counts as done.
+- **Research:** the Explore agent, or the \`code-foundations:research\` skill.
+- **Plan:** the \`code-foundations:plan\` skill. Plans feed \`code-foundations:build\`.
 
 ${contextBlock(manifest)}
 
 ${manifest.temp ? TEMP_MEMORY : memoryBlock(manifest)}## Tools
 
+The ones you'll use most; \`omniloop brief\` has the rest.
+
 | Tool | Use it for |
 |---|---|
-| \`omniloop ls ${manifest.id}\` | who is in this loop, as a tree; * = lead |
-| \`omniloop start ${manifest.id} --job J -- claude "<task>"\` | a helper that reports to you, with this loop's context |
-| \`omniloop timer 20m "<check>"\` | a note later; never sleep or poll |
-| \`omniloop needs-you\` | this block is the user's (credentials, spending, anything public) |
+| \`omniloop ls ${manifest.id}\` | the sessions in this loop, as a tree |
 | \`omniloop say "<text>"\` | post to the loop's chat feed, which the user reads |
-| \`omniloop add-dir <path>\` | add a context folder to the loop |
-| \`omniloop shared\` | other loops in this loop's folders, and their leads |
+| \`omniloop needs-you\` | this block is the user's (credentials, spending, anything public) |
+| \`omniloop shared\` | other loops in this loop's folders |
+| \`omniloop send <t> "<text>"\` | message another session; it arrives labelled as you, never as the user |
+| \`omniloop timer 20m "<check>"\` | a note later; never sleep or poll |
 | \`omniloop handoff <file>\` | at about 60% context: write \`<file>\`, run this, stop |
-| \`omniloop send <t> "<text>"\` | message a helper, your lead or another session; it arrives labelled as you, never as the user (MCP: \`send_message\`) |
-| \`hc read <t>\` | see a helper's screen |
-${manifest.temp ? "" : "| `engram search` / `engram ingest` | the shared memory (above) |\n"}
+| \`omniloop add-dir <path>\` | add a context folder to the loop |
+
 ## Decisions
 
-(The lead records decisions here, with the date and why.)
+(The coordinator records decisions here, with the date and why.)
 `;
 }
 

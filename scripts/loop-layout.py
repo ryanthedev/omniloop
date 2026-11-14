@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build Herdr's loops layout from another layout (the source is never changed): the tab bar becomes
 loop-tabs, pane headers become loop-pane, and the status bar gets a loop-status block in place of
-herdr-office's team block (it showed the same who-reports-to-whom facts).
+the source's team block (it showed the same who-reports-to-whom facts).
 Usage: loop-layout.py <source layout.json> <loops layout.json>"""
 import json, sys
 

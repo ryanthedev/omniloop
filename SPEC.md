@@ -1,7 +1,7 @@
 # Omniloop
 
 Written 2026-11-12; owner: the user. Omniloop stands alone. It needs only herdr-core (`hc`) and node, plus the
-Herdr app for the view. It depends on no Claude Code plugin (herderp, herdr-office) and reads none of their
+Herdr app for the view. It depends on no Claude Code plugin (herderp) and reads none of their
 labels.
 
 ## The idea
@@ -18,7 +18,7 @@ computer connected to other machines (`hc machine ls`) also sees theirs, keyed `
 machine's terminals: that machine's watcher does. Nothing omniloop sends to a machine names another one.
 
 Every loop has a **lead**: an agent, or you. Only the lead talks to you. A member that gets stuck goes to
-whoever it reports to, and they unstick it, the way an office works. It nests: a lead starts helpers, and a
+whoever it reports to, and they unstick it. It nests: a lead starts helpers, and a
 helper can start its own.
 
 ## A loop is a folder, a space and a Claude project

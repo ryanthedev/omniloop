@@ -25,9 +25,14 @@ test("CLAUDE.md: the context block is rewritten, the rest is kept", () => {
   assert.match(md, /`\/r\/a`/);
   assert.match(md, /engram search "m2 <topic>"/);
   assert.match(md, /--source "loop m2"/);
-  assert.match(md, /omniloop start m2 --job J/);
+  assert.match(md, /## How to work/);
+  assert.match(md, /code-foundations:build-agent.*Sonnet/);
+  assert.match(md, /code-foundations:post-gate-agent.*Opus/);
   assert.match(md, /omniloop say "<text>"/);
-  md = md.replace("(The lead records decisions here, with the date and why.)", "- 2026-11-12: use sqlite");
+  assert.match(md, /omniloop brief/);
+  assert.doesNotMatch(md, /\b(lead|leads|helper|member|office)\b/i);
+  assert.doesNotMatch(claudeMd({ ...m, temp: true }), /\b(lead|leads|helper|member|office)\b/i);
+  md = md.replace("(The coordinator records decisions here, with the date and why.)", "- 2026-11-12: use sqlite");
   const md2 = updateClaudeMd(md, addDir(m, "/r/b"));
   assert.match(md2, /`\/r\/b`/);
   assert.match(md2, /use sqlite/);

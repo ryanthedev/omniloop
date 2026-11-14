@@ -45,6 +45,7 @@ export function renameText(text, from, to) {
   const slots = [
     [new RegExp(`^# Loop: ${e}$`, "m"), `# Loop: ${to}`],
     [new RegExp(`member of the omniloop \`${e}\``, "g"), `member of the omniloop \`${to}\``],
+    [new RegExp(`This is the omniloop \`${e}\``, "g"), `This is the omniloop \`${to}\``],
     [new RegExp(`\`omniloop (ls|start) ${e}(?=[\` ])`, "g"), (_, c) => `\`omniloop ${c} ${to}`],
     [new RegExp(`engram search "${e} `, "g"), `engram search "${to} `],
     [new RegExp(`--event-id ${e}-<`, "g"), `--event-id ${to}-<`],
