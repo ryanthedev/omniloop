@@ -70,14 +70,17 @@ export function withFormerlyNote(text, from, date) {
 }
 
 /**
- * Can this loop be removed? facts per worktree: { path, worktree, branch, dirty (uncommitted files), ahead (commits on
- * its branch not in the repo's checked-out branch) }. Returns { ok, problems: [string] }. `force` overrides.
+ * Can this loop be removed? facts per checkout: { path (its repo), worktree (its folder), branch (null when detached),
+ * dirty (uncommitted files), unchecked (why git couldn't say what is in it), locked, ahead (commits on its branch not
+ * in the repo's checked-out branch) }. Returns { ok, problems: [string] }. `force` overrides.
  */
 export function removeCheck(worktrees, { force = false } = {}) {
   const problems = [];
   for (const w of worktrees) {
+    if (w.unchecked) problems.push(`${w.worktree} couldn't be checked for uncommitted work (${w.unchecked})`);
+    if (w.locked) problems.push(`${w.worktree} is locked in git`);
     if (w.dirty) problems.push(`${w.worktree} has ${w.dirty} uncommitted file(s)`);
-    if (w.ahead) problems.push(`${w.branch} has ${w.ahead} commit(s) not merged into ${w.path}`);
+    if (w.ahead) problems.push(`${w.branch ?? "detached HEAD in " + w.worktree} has ${w.ahead} commit(s) not merged into ${w.path}`);
   }
   return { ok: force || !problems.length, problems };
 }

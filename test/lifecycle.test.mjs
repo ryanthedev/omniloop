@@ -53,6 +53,10 @@ test("removeCheck refuses uncommitted or unmerged work unless forced", () => {
   assert.equal(r.problems.length, 2);
   assert.equal(removeCheck(w, { force: true }).ok, true);
   assert.equal(removeCheck([{ ...w[0], dirty: 0, ahead: 0 }]).ok, true);
+  const u = [{ path: "/r/x", worktree: "/h/wt/x", dirty: 0, ahead: 0, unchecked: "not a git repository" }];
+  assert.match(removeCheck(u).problems[0], /couldn't be checked/);
+  assert.equal(removeCheck(u, { force: true }).ok, true);
+  assert.match(removeCheck([{ ...u[0], unchecked: null, locked: true }]).problems[0], /locked/);
 });
 
 test("temporary loops end once their last agent is gone, or after a day with none", () => {

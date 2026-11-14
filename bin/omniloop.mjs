@@ -22,6 +22,7 @@ import { proposeArgs, checkProposal, fallbackProposal, identityTerms } from "../
 import { userInfo, hostname } from "node:os";
 import { deliver, liveSessions, hookRecords, turnRecord, foregroundPid } from "./lib/sock.mjs";
 import { YOU, addTask, finishTask, giveTask, editTask, reopenTask, removeTask, openTasks, taskLines, taskNote, tasksOf } from "../core/tasks.js";
+import { findCheckouts, checkoutFacts, recordedFacts, dropCheckout, repairCheckouts, realOr, isInside, kindOf } from "./lib/checkouts.mjs";
 import { claudeProjectKey, isLoopClaudeEntry, renamedManifest, renameText, withFormerlyNote, removeCheck, endedTempLoops, tempId, scrubHistory, NO_MEMORY_ENV, NO_MEMORY_TOOLS } from "../core/lifecycle.js";
 import { goalHint } from "../core/goalwords.js";
 import { selectBackend } from "./lib/backend/index.mjs";
@@ -852,7 +853,29 @@ async function agentsOf(id) {
   try { return (await allTerminals()).filter((t) => !t.address.includes("/") && t.labels?.[LABEL.loop] === id); } catch { return null; }
 }
 
-// omniloop rm-dir <path>: take a context folder out of the loop. Its worktree (if the loop has one) is removed like rm does.
+/**
+ * What rm checks and removes for a loop, or (`only`) for one folder entry: every checkout found on disk inside the loop's
+ * real folder `home` (hand-made worktrees too), plus the worktrees loop.json records that disk doesn't show (folder gone).
+ * Each item is checkout facts (bin/lib/checkouts.mjs) with `rec`: the recorded entry it is, if any.
+ */
+async function loopCheckouts(m, home, only = null) {
+  const recs = (m.dirs ?? []).filter((d) => d.worktree && !d.machine && (!only || d.path === only));
+  const items = only ? [] : (await findCheckouts(home)).map((c) => checkoutFacts(c));
+  const out = await Promise.all(items);
+  for (const d of recs) {
+    const dir = await realOr(d.worktree);
+    const hit = out.find((w) => w.dir === dir);
+    if (hit) { hit.rec = d; continue; }
+    const g = await lstat(join(dir, ".git")).catch(() => null);
+    const w = g && isInside(dir, home) ? await checkoutFacts({ dir, kind: kindOf(g) }) : await recordedFacts(d, home);
+    if (w) out.push({ ...w, rec: d });
+  }
+  return out;
+}
+const checkFacts = (w) => ({ ...w, path: w.repo, worktree: w.dir });
+
+// omniloop rm-dir <path>: take a context folder out of the loop. Only its own recorded worktree is removed (like rm
+// does); worktrees agents made by hand are listed and left for `omniloop rm`.
 async function cmdRmDir({ flags, rest }) {
   const path = rest[0] && resolvePath(rest[0]);
   const id = await loopOfMe(flags);
@@ -862,41 +885,29 @@ async function cmdRmDir({ flags, rest }) {
   if (!m) die(`loop ${id} has no folder (${home})`);
   const next = removeDir(m, path);
   if (next === m) return console.log(`${path} isn't in ${id}`);
-  for (const d of m.dirs) if (d.path === path && d.worktree && !d.machine && (await exists(d.worktree))) {
-    const r = await worktreeFacts(d);
-    const chk = removeCheck([r], { force: Boolean(flags.force) });
-    if (!chk.ok) die(`not removed: ${chk.problems.join("; ")}. Land that work first, or rerun with --force (uncommitted files are lost; the branch is kept).`);
-    for (const l of await dropWorktree(r, Boolean(flags.force))) console.log(l);
+  const realHome = await realpath(home), force = Boolean(flags.force);
+  const own = await loopCheckouts(m, realHome, path);
+  const chk = removeCheck(own.map(checkFacts), { force });
+  if (!chk.ok) die(`not removed: ${chk.problems.join("; ")}. Land that work first, or rerun with --force (uncommitted files are lost; the branch is kept).`);
+  const recorded = new Set(await Promise.all((m.dirs ?? []).filter((d) => d.worktree).map((d) => realOr(d.worktree))));
+  const repoReal = await realOr(path), handMade = [];
+  for (const c of (await findCheckouts(realHome)).filter((c) => c.kind === "linked" && !recorded.has(c.dir))) {
+    const f = await checkoutFacts(c);
+    if (f.repo && (await realOr(f.repo)) === repoReal) handMade.push(f);
   }
+  let failed = 0;
+  for (const w of own) {
+    const r = await dropCheckout(w, force, w.rec?.branch);
+    for (const l of r.lines) console.log(l);
+    if (r.failed) failed++;
+  }
+  if (failed) die(`${path} stays in ${id}: git wouldn't remove ${failed} worktree(s) (above)`);
   await writeJson(join(home, "loop.json"), next);
   await writeClaudeMd(home, next);
   await bootstrapHarnesses(home, next);
   await postFeed(id, me() ?? YOU, `context folder removed: ${path}`);
   console.log(`removed ${path} from ${id}: agents started from now don't get it.`);
-}
-
-/** A worktree's state: uncommitted files, and commits on its branch not in the repo's checked-out branch. */
-async function worktreeFacts(d) {
-  let dirty = 0, ahead = 0;
-  const here = await exists(d.worktree);
-  if (here) dirty = (await git(d.worktree, ["status", "--porcelain"]).catch(() => "")).split("\n").filter(Boolean).length;
-  try {
-    const main = await git(d.path, ["rev-parse", "--abbrev-ref", "HEAD"]);
-    ahead = Number(await git(d.path, ["rev-list", "--count", `${main}..${d.branch}`])) || 0;
-  } catch {}
-  return { ...d, dirty, ahead, here };
-}
-
-/** Remove a loop's worktree, and its branch when merged (an unmerged branch is always kept). Returns output lines. */
-async function dropWorktree(w, force) {
-  const out = [];
-  if (w.here) {
-    try { await git(w.path, ["worktree", "remove", ...(force ? ["--force"] : []), w.worktree]); out.push(`  removed worktree ${w.worktree}`); }
-    catch (e) { out.push(`  worktree ${w.worktree} not removed: ${String(e.stderr || e.message).trim().split("\n")[0]}`); return out; }
-  }
-  try { await git(w.path, ["branch", "-d", w.branch]); out.push(`  deleted branch ${w.branch} (merged)`); }
-  catch { out.push(`  kept branch ${w.branch} in ${w.path} (not merged)`); }
-  return out;
+  for (const w of handMade) console.log(`  left ${w.dir}${w.branch ? ` (branch ${w.branch})` : ""}: made by hand, not recorded; omniloop rm removes it with the loop`);
 }
 
 /**
@@ -923,13 +934,11 @@ async function cmdRename({ flags, rest }) {
   await rename(fromHome, toHome);
   await symlink(toHome, fromHome);
   const lines = [];
-  // Worktrees moved with the folder: repoint git at them, then rename their branch.
+  // Worktrees moved with the folder, hand-made ones too (found on disk): repoint git at each, then rename omniloop's branches.
+  lines.push(...(await repairCheckouts(await realpath(toHome))));
   next = { ...next, dirs: await Promise.all(next.dirs.map(async (d, i) => {
     const old = m.dirs[i];
-    if (!d.worktree || d.machine || d.worktree === old.worktree) return d;
-    try { await git(d.path, ["worktree", "repair", d.worktree]); } catch {}
-    try { await git(d.worktree, ["rev-parse", "--git-dir"]); } catch (e) { lines.push(`  ${d.worktree}: git doesn't see this worktree yet; run git -C ${d.path} worktree repair ${d.worktree}`); }
-    if (d.branch === old.branch) return d;
+    if (!d.worktree || d.machine || d.worktree === old.worktree || d.branch === old.branch) return d;
     try { await git(d.path, ["branch", "-m", old.branch, d.branch]); lines.push(`  ${d.path}: worktree ${d.worktree}, branch ${d.branch}`); return d; }
     catch (e) { lines.push(`  ${d.path}: branch stays ${old.branch} (${String(e.stderr || e.message).trim().split("\n")[0]})`); return { ...d, branch: old.branch }; }
   })) };
@@ -953,11 +962,13 @@ async function cmdRename({ flags, rest }) {
 }
 
 /**
- * omniloop rm [<loop>] [--force] [--purge]: delete a loop. Refuses when a worktree has uncommitted files or unmerged
- * commits (--force: drop the files, keep the branch), or when it has running agents and you're not one of them
+ * omniloop rm [<loop>] [--force] [--purge] [--auto]: delete a loop. Refuses when a git checkout inside its folder (omniloop's
+ * worktrees, ones agents made by hand, clones) has uncommitted files, unmerged commits, is locked or can't be checked
+ * (--force: drop the files, keep the branch), or when it has running agents and you're not one of them
  * (--force: stop them). Deletes the loop folder and its worktrees, never its context folders. Closes its space last,
  * from a detached process, so it works from inside the loop. --purge (always on for a temporary loop) also deletes
- * its Claude transcripts, scratchpads, prompt-history lines and omniloop's own records of its terminals.
+ * its Claude transcripts, scratchpads, prompt-history lines and omniloop's own records of its terminals. --auto is the
+ * watcher's reaping: a refusal is posted to the loop's feed and printed, and exits 0 so the next loop is still reaped.
  */
 async function cmdRm({ flags, rest }) {
   const id = rest[0] ?? (await loopOfMe(flags));
@@ -968,22 +979,35 @@ async function cmdRm({ flags, rest }) {
   const home = await realpath(loopHome(homedir(), id));
   if (dirname(home) !== root) die(`refusing: ${home} isn't a folder in ${root}`);
   const force = Boolean(flags.force), purge = Boolean(flags.purge) || Boolean(m.temp);
-  const wts = [];
-  for (const d of m.dirs ?? []) if (d.worktree && !d.machine) wts.push(await worktreeFacts(d));
-  const chk = removeCheck(wts, { force });
-  if (!chk.ok) die(`${id} not removed: ${chk.problems.join("; ")}. Land or drop that work first, or rerun with --force (uncommitted files are lost; an unmerged branch is kept).`);
+  // What may be lost comes from disk (every checkout inside the loop's real folder), not from git's lists; all checks run
+  // before anything is removed. --auto (the watcher reaping a temporary loop) never throws: a refusal is posted and printed.
+  const refuse = async (why) => {
+    if (!flags.auto) die(why);
+    const line = `${id} kept: ${why}`;
+    await postFeed(id, "omniloop", line);
+    console.log(line);
+  };
+  const wts = await loopCheckouts(m, home);
+  const chk = removeCheck(wts.map(checkFacts), { force });
+  if (!chk.ok) return refuse(`${id} not removed: ${chk.problems.join("; ")}. Land or drop that work first, or rerun with --force (uncommitted files are lost; an unmerged branch is kept).`);
   const agents = await agentsOf(id);
-  if (agents === null && !force) die(`${backend.words.down} didn't answer, so the loop's running agents can't be found; rerun with --force to delete anyway`);
+  if (agents === null && !force) return refuse(`${backend.words.down} didn't answer, so the loop's running agents can't be found; rerun with --force to delete anyway`);
   const live = (agents ?? []).filter((t) => t.state === "live");
   const inside = me() && live.some((t) => t.address === me());
-  if (live.length && !inside && !force) die(`${id} has ${live.length} running agent(s) (${live.map((t) => t.address).join(", ")}): rerun with --force to stop them, or run it from inside the loop`);
+  if (live.length && !inside && !force) return refuse(`${id} has ${live.length} running agent(s) (${live.map((t) => t.address).join(", ")}): rerun with --force to stop them, or run it from inside the loop`);
   const sp = await backend.groupOf(id);
   const aliases = await aliasesOf(home);
   const job = { id, home, root, space: sp ?? null, terms: (agents ?? []).map((t) => t.address), purge, aliases, formerly: await formerHomes(m, home) };
-  if (flags["dry-run"]) return console.log(JSON.stringify({ worktrees: wts.map((w) => w.worktree), ...job }, null, 1));
+  if (flags["dry-run"]) return console.log(JSON.stringify({ worktrees: wts.map((w) => w.dir), ...job }, null, 1));
 
   const lines = [];
-  for (const w of wts) lines.push(...(await dropWorktree(w, force)));
+  let failed = 0;
+  for (const w of wts) {
+    const r = await dropCheckout(w, force, w.rec?.branch);
+    lines.push(...r.lines);
+    if (r.failed) failed++;
+  }
+  if (failed) return refuse(`${id} not deleted: git wouldn't remove ${failed} worktree(s):\n${lines.join("\n")}\nFix that (or remove it by hand), then rerun.`);
   // Timers for its agents would only fire into nothing.
   for (const f of await readdir(TIMERS).catch(() => [])) {
     const t = await readJson(join(TIMERS, f));
