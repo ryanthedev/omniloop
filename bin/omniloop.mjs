@@ -13,10 +13,10 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LABEL, COORDINATOR_KEYS, isCoordinatorLabeled, buildLoops, statusOf } from "../core/omniloop.js";
 import { initState, step, parseDuration, touchedByYou, sendFailed, hold, withoutReplies, adoptions, ADOPT_AFTER_MS, ADOPTED } from "../core/watch.js";
-import { validId, loopHome, newManifest, addDir, removeDir, dirsOn, launchDirsOn, worktreeChoice, worktreeTarget, worktreeBranch, setWorktree, overlaps, claudeMd, updateClaudeMd, agentArgv, parseAliasWords, sharedWith, LOOPS_DIR } from "../core/loopdir.js";
-import { bootstrapLoop } from "./lib/harness-apply.mjs";
-import { matchProjects, addProject, removeProject, projectLaunch, withProjectsBlock } from "../core/projects.js";
-import { goalsOf, openGoals, setGoal, addGoal, finishGoal, editGoal, withGoalBlock, goalNote } from "../core/goals.js";
+import { validId, loopHome, newManifest, addDir, removeDir, dirsOn, launchDirsOn, worktreeChoice, worktreeTarget, worktreeBranch, setWorktree, overlaps, agentArgv, parseAliasWords, sharedWith, LOOPS_DIR } from "../core/loopdir.js";
+import { bootstrapLoop, refreshClaudeMd } from "./lib/harness-apply.mjs";
+import { matchProjects, addProject, removeProject, projectLaunch } from "../core/projects.js";
+import { goalsOf, openGoals, setGoal, addGoal, finishGoal, editGoal, goalNote } from "../core/goals.js";
 import { feedEntry, feedLine, parseFeed, replyPlan, FEED_FILE } from "../core/feed.js";
 import { proposeArgs, checkProposal, fallbackProposal, identityTerms } from "../core/intake.js";
 import { userInfo, hostname } from "node:os";
@@ -97,21 +97,8 @@ async function launchOf(manifest) {
   return { dirs: all, pluginDirs: [PLUGIN, ...pluginDirs], noMemory: manifest.temp ? { env: NO_MEMORY_ENV, tools: NO_MEMORY_TOOLS } : null };
 }
 
-/** The loop's CLAUDE.md text, or null when there is none. Only ENOENT means absent; any other error is thrown. */
-async function readClaudeMd(home) {
-  try { return await readFile(join(home, "CLAUDE.md"), "utf8"); } catch (e) { if (e.code === "ENOENT") return null; throw e; }
-}
-
-/**
- * CLAUDE.md for a loop, with its projects' CONTEXT.md in the projects block. `existing`: its text (null = none yet;
- * omitted = read it here). A file that can't be read is left alone with a note, never regenerated; so is a block whose
- * markers are damaged.
- */
-async function writeClaudeMd(home, manifest, existing = undefined) {
-  if (existing === undefined) {
-    try { existing = await readClaudeMd(home); }
-    catch (e) { return console.error(`omniloop: CLAUDE.md can't be read (${e.code ?? e.message}): left alone`); }
-  }
+/** The projects' CONTEXT.md for a loop's CLAUDE.md: [{ name, text }]. */
+async function projectContexts(manifest) {
   const projects = await loadProjects();
   const contexts = [];
   for (const name of manifest.projects ?? []) {
@@ -119,17 +106,22 @@ async function writeClaudeMd(home, manifest, existing = undefined) {
     const text = p && (await readFile(join(p.dir, "CONTEXT.md"), "utf8").catch(() => null));
     if (text) contexts.push({ name, text });
   }
-  const notes = [];
-  const base = existing === null ? claudeMd(manifest) : updateClaudeMd(existing, manifest, notes);
-  const text = withGoalBlock(withProjectsBlock(base, contexts, notes), manifest, notes);
-  for (const n of notes) console.error(`omniloop: ${n}`);
-  if (text !== existing) await writeFile(join(home, "CLAUDE.md"), text);
+  return contexts;
+}
+
+/**
+ * Bring a loop's CLAUDE.md up to date (harness-apply.mjs refreshClaudeMd): only its managed blocks change. A file that
+ * can't be read, or a block with damaged markers, is left alone with a note on stderr. `edit`: see refreshClaudeMd.
+ */
+async function writeClaudeMd(home, manifest, edit = undefined) {
+  const r = await refreshClaudeMd(home, manifest, { contexts: await projectContexts(manifest), edit });
+  for (const n of r.notes) console.error(`omniloop: ${n}`);
 }
 
 /** Harness config (core/harness.js) for a loop folder; a problem is one line, never a failure. */
 async function bootstrapHarnesses(home, manifest) {
   let lines;
-  try { lines = await bootstrapLoop(home, manifest); } catch (e) { lines = [`failed (${String(e.message).split("\n")[0]})`]; }
+  try { lines = await bootstrapLoop(home, manifest, { claude: false }); } catch (e) { lines = [`failed (${String(e.message).split("\n")[0]})`]; }
   if (lines.length) console.log(`  harness config: ${lines.join("; ")}`);
 }
 
@@ -143,7 +135,7 @@ function splitTask(argv) {
 function die(msg) { console.error(`omniloop: ${msg}`); process.exit(1); }
 
 // Flags that never take a value, so `--json some text` keeps the text.
-const BOOL = new Set(["json", "dry-run", "coordinator", "no-coordinator", "temp", "force", "purge", "auto"]);
+const BOOL = new Set(["json", "all", "dry-run", "coordinator", "no-coordinator", "temp", "force", "purge", "auto"]);
 // Old flag names, still accepted (silently) as aliases of the new ones.
 const FLAG_ALIAS = { lead: "coordinator", "no-lead": "no-coordinator" };
 function parseArgs(argv) {
@@ -449,14 +441,36 @@ async function cmdAddDir({ flags, rest }) {
   for (const l of lines) console.log(l);
 }
 
-// omniloop bootstrap [loop]: (re)apply every harness's config to an existing loop.
+// omniloop bootstrap [<loop> | --all] [--dry-run]: (re)apply every harness's config to existing loops and refresh the
+// managed blocks of their CLAUDE.md. A loop that can't be handled is one printed line, never a failed command.
+async function bootstrapOne(id, dry) {
+  const home = loopHome(homedir(), id);
+  let m;
+  try { m = JSON.parse(await readFile(join(home, "loop.json"), "utf8")); }
+  catch (e) { return `${id}: loop.json can't be used (${e.code ?? "not valid JSON"}): left alone`; }
+  if (m?.id !== id || !Array.isArray(m.dirs)) return `${id}: loop.json has no id and dirs list that fit: left alone`;
+  try {
+    const lines = await bootstrapLoop(home, m, { contexts: await projectContexts(m), dry });
+    return `${dry ? "would bootstrap" : "bootstrapped"} ${id}${lines.length ? `: ${lines.join("; ")}` : " (already up to date)"}`;
+  } catch (e) { return `${id}: failed (${String(e.message).split("\n")[0]})`; }
+}
+
 async function cmdBootstrap({ flags, rest }) {
+  const dry = Boolean(flags["dry-run"]);
+  if (flags.all) {
+    if (rest.length) die("usage: omniloop bootstrap [<loop> | --all] [--dry-run]");
+    const root = join(homedir(), LOOPS_DIR);
+    // Real folders only: a renamed loop leaves its old name as a link to the new folder.
+    const names = [];
+    for (const n of (await readdir(root).catch(() => [])).sort()) if (validId(n) && (await lstat(join(root, n)).catch(() => null))?.isDirectory()) names.push(n);
+    if (!names.length) return console.log("no loops here");
+    for (const n of names) console.log(await bootstrapOne(n, dry));
+    return;
+  }
   const id = rest[0] ?? (await loopOfMe(flags));
-  if (!validId(id)) die("usage: omniloop bootstrap [<loop>]   (in a loop, <loop> defaults to it)");
-  const m = await manifestOf(id);
-  if (!m || m.id !== id) die(`no loop ${id} here`);
-  const lines = await bootstrapLoop(loopHome(homedir(), id), m);
-  console.log(`bootstrapped ${id}${lines.length ? `: ${lines.join("; ")}` : " (already up to date)"}`);
+  if (!validId(id)) die("usage: omniloop bootstrap [<loop> | --all] [--dry-run]   (in a loop, <loop> defaults to it)");
+  if (!(await exists(join(loopHome(homedir(), id), "loop.json")))) die(`no loop ${id} here`);
+  console.log(await bootstrapOne(id, dry));
 }
 
 async function allManifests() {
@@ -789,7 +803,7 @@ const BRIEF = `omniloop: you are in a loop (a piece of work with one coordinator
   omniloop task [ls | add "…" --for you|me|t3 | done N | give N t3 | edit N "…" | reopen N | rm N | move N <loop>]
   omniloop say "…" [--thread T]           post to the loop's chat feed (the user reads it there)
   omniloop add-dir <path> | rm-dir <path> add or remove a context folder of the loop (CLAUDE.md lists them)
-  omniloop bootstrap [<loop>]             (re)write the loop's harness config (.claude/settings.json; AGENTS.md linked to CLAUDE.md)
+  omniloop bootstrap [<loop>|--all] [--dry-run]  refresh the loop's CLAUDE.md blocks and harness config (.claude/settings.json; AGENTS.md link)
   omniloop shared                         other loops in this loop's folders, and their coordinators (tell them before a change)
   omniloop project ls | project add|rm <project>   reusable context (skills, tools, notes) for a kind of work
   omniloop rename [<old>] <new>           rename (move) a loop: folder, worktrees, branches, space, labels
@@ -917,12 +931,10 @@ async function cmdRename({ flags, rest }) {
     catch (e) { lines.push(`  ${d.path}: branch stays ${old.branch} (${String(e.stderr || e.message).trim().split("\n")[0]})`); return { ...d, branch: old.branch }; }
   })) };
   await writeJson(join(toHome, "loop.json"), next);
-  let md;
-  try { md = await readClaudeMd(toHome); } catch (e) { console.error(`omniloop: CLAUDE.md can't be read (${e.code ?? e.message}): left alone`); }
-  if (md !== undefined) {
-    if (md) { md = renameText(md, from, to); if (!next.temp) md = withFormerlyNote(md, from, new Date(now).toISOString().slice(0, 10)); }
-    await writeClaudeMd(toHome, next, md);
-  }
+  await writeClaudeMd(toHome, next, (md) => {
+    md = renameText(md, from, to);
+    return next.temp ? md : withFormerlyNote(md, from, new Date(now).toISOString().slice(0, 10));
+  });
   await bootstrapHarnesses(toHome, next);
   // Claude Code saves sessions by folder: move them along, and link the old one for sessions still running.
   const projects = join(homedir(), ".claude", "projects");

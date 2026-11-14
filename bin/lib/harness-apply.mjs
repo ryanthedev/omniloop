@@ -6,6 +6,7 @@ import { mkdir, readFile, writeFile, rename, rm, lstat, readlink, symlink, stat,
 import { join, dirname, sep } from "node:path";
 import { randomBytes } from "node:crypto";
 import { harnessFiles } from "../../core/harness.js";
+import { refreshedClaudeMd } from "../../core/claudemd.js";
 
 /** The file's text, or null when it doesn't exist. Any other error (no permission, not a folder) is thrown. */
 async function read(p) {
@@ -33,9 +34,35 @@ export async function writeAtomic(path, text) {
   } catch (e) { await rm(tmp, { force: true }); throw e; }
 }
 
-/** Apply every harness's files in the loop folder `loopPath`. Returns lines (what was written, or why not). */
-export async function bootstrapLoop(loopPath, manifest) {
+/**
+ * Bring the loop's CLAUDE.md up to date: created from the template when missing, else only its managed blocks are
+ * rewritten. Never through a symlink; an unreadable file or a block with damaged markers is left alone. Writes only
+ * when the text changed. `edit` (text -> text) runs on an existing file first (rename). Returns { notes, change } with
+ * change null, "wrote" or (dry) "would write".
+ */
+export async function refreshClaudeMd(loopPath, manifest, { contexts = [], dry = false, edit = (t) => t } = {}) {
+  const p = join(loopPath, "CLAUDE.md");
+  try {
+    const via = await linkOnPath(loopPath, p);
+    if (via) return { notes: [via === "CLAUDE.md" ? "CLAUDE.md is a symlink: left alone" : `CLAUDE.md: ${via} is a symlink: left alone`], change: null };
+    let cur;
+    try { cur = await read(p); } catch (e) { return { notes: [`CLAUDE.md can't be read (${e.code ?? e.message}): left alone`], change: null }; }
+    const notes = [];
+    const text = refreshedClaudeMd(cur === null ? null : edit(cur), manifest, contexts, notes);
+    if (text === cur) return { notes, change: null };
+    if (!dry) await writeAtomic(p, text);
+    return { notes, change: dry ? "would write" : "wrote" };
+  } catch (e) { return { notes: [`CLAUDE.md failed (${String(e.message).split("\n")[0]})`], change: null }; }
+}
+
+/**
+ * Apply every harness's files and refresh CLAUDE.md in the loop folder `loopPath`. Returns lines (what was written, or
+ * why not). `contexts`: the projects' CONTEXT.md for CLAUDE.md. `dry`: write nothing, say what would change.
+ * `claude: false`: leave CLAUDE.md to the caller (it just wrote it).
+ */
+export async function bootstrapLoop(loopPath, manifest, { contexts = [], dry = false, claude = true } = {}) {
   const lines = [];
+  const verb = dry ? "would write" : "wrote";
   for (const f of harnessFiles(manifest)) {
     const p = join(loopPath, f.path);
     try {
@@ -45,6 +72,7 @@ export async function bootstrapLoop(loopPath, manifest) {
         if (via && via !== f.path) lines.push(`${f.path}: ${via} is a symlink: left alone`);
         else if (st && !st.isSymbolicLink()) lines.push(`${f.path} is a real file: left alone`);
         else if (st) { const to = await readlink(p); if (to !== f.link) lines.push(`${f.path} is a link to ${to}, not ${f.link}: left alone`); }
+        else if (dry) lines.push(`would link ${f.path} -> ${f.link}`);
         else { await symlink(f.link, p); lines.push(`${f.path} -> ${f.link}`); }
         continue;
       }
@@ -54,10 +82,14 @@ export async function bootstrapLoop(loopPath, manifest) {
       const { text, note } = f.merge(cur);
       if (note) lines.push(note);
       if (text === cur) continue;
-      await mkdir(dirname(p), { recursive: true });
-      await writeAtomic(p, text);
-      lines.push(`wrote ${f.path}`);
+      if (!dry) { await mkdir(dirname(p), { recursive: true }); await writeAtomic(p, text); }
+      lines.push(`${verb} ${f.path}`);
     } catch (e) { lines.push(`${f.harness}: ${f.path} failed (${String(e.message).split("\n")[0]})`); }
+  }
+  if (claude) {
+    const r = await refreshClaudeMd(loopPath, manifest, { contexts, dry });
+    lines.push(...r.notes);
+    if (r.change) lines.push(`${r.change} CLAUDE.md`);
   }
   return lines;
 }
