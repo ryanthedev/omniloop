@@ -8,7 +8,7 @@
 
 import { validId } from "./loopdir.js";
 import { fuzzyFields, tokenScore, tokens, snippet } from "./fuzzy.js";
-import { slotOf } from "./pins.js";
+import { slotOf, pinnedSlots } from "./pins.js";
 
 const words = (s) => String(s ?? "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
 
@@ -164,6 +164,16 @@ export function loopEntries(viewLoops = [], index = [], pins = [], local = LOCAL
     out.push({ key: x.id, where: local, id: x.id, machine: null, goal: x.goal ?? "", lead: null, needsYou: 0, forYouLabel: "", status: null, ago: null, lastWithYou: null,
       touched: x.touched ?? null, running: false, members: [], dirs: x.dirs ?? [], projects: x.projects ?? [], tasks: x.tasks ?? [], feed: x.feed ?? [],
       pin: slotOf(pins, x.id) });
+    seen.add(x.id);
+  }
+  // A pin whose loop isn't found (another machine's loop with nobody running, or a loop since removed or renamed)
+  // still holds its slot: show it, so you can see why the numbers skip and unpin it.
+  for (const { key, slot } of pinnedSlots(pins)) {
+    if (seen.has(key)) continue;
+    const i = key.indexOf("/");
+    const machine = i < 0 ? null : key.slice(0, i);
+    out.push({ key, where: machine ?? local, id: machine ? key.slice(i + 1) : key, machine, goal: "", lead: null, needsYou: 0, forYouLabel: "", status: null, ago: null,
+      lastWithYou: null, touched: null, running: false, stale: true, members: [], dirs: [], projects: [], tasks: [], feed: [], pin: slot });
   }
   return out;
 }

@@ -19,7 +19,7 @@ import { terminals, theme, run, exec, home, readTextFile, props, closeOverlay, s
 import { buildView, ago } from "./core/view.js";
 import { folderRows, projectRows, machineRows, newLoopCommand, leadAddress, clampAt, loopEntries, pickerRows, suggestLoops, LOCAL_NAME } from "./core/picker.js";
 import { matchProjects, strongMatches } from "./core/projects.js";
-import { PINS_KEY, sanitizePins, togglePin, movePin } from "./core/pins.js";
+import { PINS_KEY, sanitizePins, togglePin, movePin, pinTo } from "./core/pins.js";
 import { cleanId, fallbackProposal } from "./core/intake.js";
 import { tokens } from "./core/fuzzy.js";
 import { BIN } from "./config.js";
@@ -113,6 +113,7 @@ export default class OmniloopPicker extends View {
   // ---- loops ----
 
   open(entry, cx) {
+    if (entry.stale) { this.error = `Pinned at ${entry.pin}, but ${entry.key} isn't found${entry.machine ? ` (nobody is running in it on ${entry.machine})` : ""}. ⌘P unpins it.`; return; }
     if (entry.lead) { this.close(); run("pane.focus", { terminal: entry.lead }); return; }
     // Nobody is running in it: start a fresh lead that catches up from the loop's notes (omniloop revive).
     // Only this computer's loops: another machine's loop is never started or read from here.
@@ -153,6 +154,13 @@ export default class OmniloopPicker extends View {
       if (t.full) { this.error = "All 9 pins are taken; unpin one first (⌘P on it)."; return; }
       setShared(PINS_KEY, t.pins);
       notify({ title: "Omniloop", body: t.slot ? `Pinned ${r.entry.id} at ${t.slot}` : `Unpinned ${r.entry.id}`, level: "success", timeout: 1400 });
+    } else if (/^pin-[1-9]$/.test(c)) {
+      const slot = Number(c.slice(4));
+      const p = pinTo(this.pins(), key, slot);
+      setShared(PINS_KEY, p.pins);
+      const m = p.moved ? (p.moved.slot ? ` · ${p.moved.key} moved to ${p.moved.slot}` : ` · ${p.moved.key} unpinned (no empty slot)`) : "";
+      notify({ title: "Omniloop", body: `Pinned ${r.entry.id} at ${slot}${m}`, level: "success", timeout: 1800 });
+      if (!this.query) this.at = Math.max(0, this.rows().findIndex((x) => x.entry?.key === key));
     } else if (c === "pin-up" || c === "pin-down") {
       setShared(PINS_KEY, movePin(this.pins(), key, c === "pin-up" ? -1 : 1));
       // Keep the moved loop selected.
@@ -384,9 +392,10 @@ export default class OmniloopPicker extends View {
   loopRow(t, r, on, i) {
     const e = r.entry;
     const n = e.members.length;
-    const when = e.running ? (e.ago ? `you ${e.ago}` : "you: never") : (e.touched ? `idle ${ago(e.touched, Date.now())} · Enter starts a lead` : "idle · Enter starts a lead");
+    const when = e.stale ? "not found · ⌘P unpins" : e.running ? (e.ago ? `you ${e.ago}` : "you: never") : (e.touched ? `idle ${ago(e.touched, Date.now())} · Enter starts a lead` : "idle · Enter starts a lead");
     return h_flex().id(`pk-${e.key}`).h(60).px(18).gap(14).items_center().rounded(12).cursor_pointer()
       .bg(on ? t.raised : t.background).border(1).border_color(on ? t.accent : t.background)
+      .on_hover((h, cx) => this.hover(h ? e : null, e.key, cx))
       .on_click((_e, cx) => { this.at = i; this.enter(cx); })
       .child(div().w(16).flex_none().text_size(12).font_bold().text_color(t.accent).child(e.pin ? String(e.pin) : ""))
       .child(this.dot(t, e.status, e.running))
@@ -395,7 +404,7 @@ export default class OmniloopPicker extends View {
           .child(div().text_size(15).font_semibold().text_color(e.running ? t.foreground : t.muted).child(e.id))
           .child(this.chip(t, e.where ?? e.machine ?? this.localName, t.dim))
           .when(e.needsYou > 0, (el) => el.child(this.chip(t, e.forYouLabel || `${e.needsYou} for you`, t.blocked))))
-        .child(div().text_size(12.5).text_color(r.why ? t.accent : t.muted).truncate().child(r.why ?? e.goal ?? "")))
+        .child(div().text_size(12.5).text_color(r.why ? t.accent : t.muted).truncate().child(r.why ?? (e.stale ? (e.machine ? `pinned, but nobody is running in it on ${e.machine}` : "pinned, but no loop by this name (removed or renamed?)") : e.goal ?? ""))))
       .child(v_flex().flex_none().items_end().gap(2)
         .child(div().text_size(11.5).text_color(e.ago ? t.muted : t.dim).child(when))
         .when(e.running, (el) => el.child(div().text_size(11).text_color(t.dim).child(`${n} session${n === 1 ? "" : "s"}`))));
@@ -426,6 +435,54 @@ export default class OmniloopPicker extends View {
       .when(Boolean(note), (el) => el.child(div().pl(62).text_size(11.5).text_color(t.dim).child(note)));
   }
 
+  // ---- hover preview ----
+
+  /** The pointer entered (entry) or left (null) loop row `key`. Leaving one row only clears its own preview, so moving
+   *  between rows never flickers. The lead's screen is read once a second at most per loop. */
+  hover(entry, key, cx) {
+    if (!entry) { if (this.hovered?.key === key) { this.hovered = null; cx.notify(); } return; }
+    this.hovered = entry; cx.notify();
+    const lead = entry.lead, seen = this.screens?.[entry.key];
+    if (!lead || (seen && Date.now() - seen.at < 1000)) return;
+    this.screens = { ...(this.screens ?? {}), [entry.key]: { at: Date.now(), lines: seen?.lines ?? null } };
+    cx.spawn(async (cx) => {
+      try {
+        const r = await exec(this.hc(), ["read", lead], { timeout: 4000 });
+        const lines = (r.stdout ?? "").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").split("\n").map((l) => l.replace(/\s+$/, ""));
+        while (lines.length && !lines[lines.length - 1]) lines.pop();
+        this.screens[entry.key] = { at: Date.now(), lines: lines.slice(-14) };
+      } catch { this.screens[entry.key] = { at: Date.now(), lines: [] }; }
+      cx.notify();
+    });
+  }
+
+  /** The preview card for the hovered loop: goal, sessions with their status, recent chat, the lead's screen. */
+  preview(t, e) {
+    const live = this.view().loops.find((l) => l.id === e.key);
+    const rows = live?.rows ?? [];
+    const screen = this.screens?.[e.key]?.lines;
+    const label = (x) => div().pt(6).text_size(10.5).font_semibold().text_color(t.dim).child(x);
+    return v_flex().id("pk-preview").w(360).max_h(620).overflow_hidden().p(16).gap(4).rounded(12).border(1).border_color(t.border).bg(t.raised)
+      .child(h_flex().gap(8).items_center()
+        .when(Boolean(e.pin), (el) => el.child(this.chip(t, String(e.pin), t.accent)))
+        .child(div().flex_1().min_w(0).truncate().text_size(15).font_semibold().text_color(t.foreground).child(e.id))
+        .child(this.chip(t, e.where ?? e.machine ?? this.localName, t.dim)))
+      .child(div().text_size(12.5).text_color(t.muted).child(e.stale ? "Pinned, but not found. ⌘P on its row unpins it." : e.goal || "No goal written"))
+      .when(rows.length > 0, (el) => el.child(label(`SESSIONS (${rows.length})`)).children(rows.slice(0, 6).map((m) =>
+        h_flex().gap(8).items_center().pl(m.depth * 12)
+          .child(this.dot(t, m.status, true))
+          .child(div().text_size(10.5).text_color(t.dim).child(m.address))
+          .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.foreground).child(`${m.name}${m.isLead ? " ★" : ""}`))
+          .when(Boolean(m.forYouLabel), (x) => x.child(div().text_size(11).text_color(t.blocked).child(m.forYouLabel))))))
+      .when(e.tasks.length > 0, (el) => el.child(label("OPEN TASKS")).children(e.tasks.slice(0, 3).map((x) => div().truncate().text_size(12).text_color(t.muted).child(`· ${x}`))))
+      .when(e.feed.length > 0, (el) => el.child(label("RECENT CHAT")).children(e.feed.slice(-3).map((x) => div().truncate().text_size(12).text_color(t.muted).child(x))))
+      .when(Boolean(e.lead), (el) => el.child(label(`LEAD'S SCREEN · ${e.lead}`))
+        .child(v_flex().p(8).rounded(8).bg(t.background).overflow_hidden().children(screen == null
+          ? [div().text_size(11).text_color(t.dim).child("Reading…")]
+          : screen.length ? screen.map((l) => div().h(15).whitespace_nowrap().overflow_hidden().font_family("Menlo").text_size(10.5).text_color(t.muted).child(l || " "))
+          : [div().text_size(11).text_color(t.dim).child("Nothing on screen")])));
+  }
+
   row(t, r, on, i) {
     if (r.kind === "loop") return this.loopRow(t, r, on, i);
     if (r.kind === "new" || r.kind === "continue") return this.newRow(t, r, on, i);
@@ -454,7 +511,7 @@ export default class OmniloopPicker extends View {
       case "context": return `↑↓ move · Tab add or remove · Enter next with ${this.pickedProjects.length ? `${this.pickedProjects.join(", ")} + ` : ""}${this.picked.length} folder${this.picked.length === 1 ? "" : "s"} · Esc back`;
       case "review": return f?.pending && !f.edited ? "Naming it…" : "↑↓ folder or goal · type to edit · Enter create · Esc back";
       case "creating": return `Creating the loop, its space and its lead${this.machine ? ` on ${this.machine}` : ""}…`;
-      default: return "↑↓ move · Enter open · ⌘P pin · ⌘↵ new loop · Esc close";
+      default: return "↑↓ move · Enter open · ⌘P pin · ⌘1-9 pin to slot · ⌘↵ new loop · Esc close";
     }
   }
 
@@ -485,6 +542,7 @@ export default class OmniloopPicker extends View {
         if (k === "escape") return this.back(cx);
         // Pins, also reachable without keys.json (if the app hands these chords to the dialog).
         if (ks === "cmd-p") { this.command("pin", cx); cx.stop_propagation(); return cx.notify(); }
+        if (/^cmd-[1-9]$/.test(ks)) { this.command(`pin-${ks.slice(4)}`, cx); cx.stop_propagation(); return cx.notify(); }
         if (ks === "cmd-up" || ks === "cmd-down") { this.command(ks === "cmd-up" ? "pin-up" : "pin-down", cx); cx.stop_propagation(); return cx.notify(); }
         const n = Math.max(1, rows.length);
         const down = k === "down" || (k === "n" && e.modifiers.control), up = k === "up" || (k === "p" && e.modifiers.control);
@@ -496,7 +554,9 @@ export default class OmniloopPicker extends View {
         cx.stop_propagation();
         cx.notify();
       })
-      .child(v_flex().w_full().max_w(760).px(32).pt(96).gap(18)
+      // While choosing a loop, a column at the right holds the hovered loop's preview. It is always there in this
+      // step, so hovering never reflows the list under the pointer.
+      .child(h_flex().w_full().justify_center().items_start().gap(8).child(v_flex().flex_1().min_w(0).max_w(760).px(32).pt(96).gap(18)
         .child(div().text_size(11).font_semibold().text_color(t.dim).child("OMNILOOP"))
         .child(v_flex().gap(6)
           .child(div().text_size(30).font_semibold().text_color(t.foreground).child(title))
@@ -513,6 +573,8 @@ export default class OmniloopPicker extends View {
             ? [el, div().px(4).pt(10).text_size(11).font_semibold().text_color(t.dim).child("ALREADY A LOOP FOR THIS?")] : [el];
         })))
         .when(rows.length > shown.length, (el) => el.child(div().px(4).text_size(11.5).text_color(t.dim).child(`${rows.length - shown.length} more; keep typing to narrow`))))
+        .when(this.step === "ask", (el) => el.child(div().w(360).flex_none().pt(96).pr(20)
+          .child(this.hovered ? this.preview(t, this.hovered) : div().pt(150).px(16).text_size(12).text_color(t.dim).child("Hover a loop to preview it")))))
       .child(div().flex_1())
       .child(h_flex().pb(22).gap(10).items_center()
         .child(div().text_size(12).text_color(t.dim).child(this.hints()))

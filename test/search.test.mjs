@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { tokenScore, fuzzyFields, snippet } from "../core/fuzzy.js";
-import { sanitizePins, togglePin, movePin, slotOf, MAX_PINS } from "../core/pins.js";
+import { sanitizePins, togglePin, movePin, slotOf, pinTo, pinnedSlots, MAX_PINS } from "../core/pins.js";
 import { cleanId, uniqueId, checkProposal, fallbackProposal, proposeArgs, PROPOSE_SYSTEM } from "../core/intake.js";
 import { loopEntries, pickerRows, entryMatch, suggestLoops, folderRows, projectRows, splitMachine, onMachine, LOCAL_NAME } from "../core/picker.js";
 
@@ -41,11 +41,40 @@ test("pins: toggle, order, cap, move, sanitize", () => {
   assert.equal(slotOf(p, "ska/b"), 2);
   assert.deepEqual(movePin(p, "ska/b", -1), ["ska/b", "a"]);
   assert.deepEqual(movePin(p, "a", -1), p);
-  assert.deepEqual(togglePin(p, "a").pins, ["ska/b"]);
+  assert.deepEqual(togglePin(p, "a").pins, [null, "ska/b"]);   // slot 2 stays 2
   const full = Array.from({ length: MAX_PINS }, (_, i) => `l${i}`);
   assert.equal(togglePin(full, "x").full, true);
-  assert.deepEqual(sanitizePins(["a", "a", 3, "", "b"]), ["a", "b"]);
+  assert.deepEqual(sanitizePins(["a", "a", 3, "", "b"]), ["a", null, null, null, "b"]);
+  assert.deepEqual(sanitizePins(["a", null, "b", null, null]), ["a", null, "b"]);
   assert.deepEqual(sanitizePins(null), []);
+});
+
+test("pins: slots are fixed; unpin leaves a hole and a new pin takes the lowest empty slot", () => {
+  let p = ["a", "b", "c", "d"];
+  p = togglePin(p, "a").pins;
+  assert.deepEqual(p, [null, "b", "c", "d"]);
+  assert.equal(slotOf(p, "d"), 4);                       // the leader's slot 4 still jumps to d
+  const t = togglePin(p, "e");
+  assert.equal(t.slot, 1);
+  assert.deepEqual(t.pins, ["e", "b", "c", "d"]);
+  assert.deepEqual(togglePin(["a", "b"], "b").pins, ["a"]); // no empty slots at the end
+  assert.deepEqual(pinnedSlots([null, "b", null, "d"]), [{ key: "b", slot: 2 }, { key: "d", slot: 4 }]);
+});
+
+test("pins: ⌘<n> puts a loop in slot n; the one there swaps or takes the lowest empty slot", () => {
+  assert.deepEqual(pinTo(["a", "b", "c"], "c", 1), { pins: ["c", "b", "a"], moved: { key: "a", slot: 3 } });
+  assert.deepEqual(pinTo(["a", null, "c"], "x", 3), { pins: ["a", "c", "x"], moved: { key: "c", slot: 2 } });
+  assert.deepEqual(pinTo(["a"], "x", 5), { pins: ["a", null, null, null, "x"], moved: null });
+  assert.deepEqual(pinTo(["a", "b"], "a", 1), { pins: ["a", "b"], moved: null });
+  const full = Array.from({ length: MAX_PINS }, (_, i) => `l${i}`);
+  assert.deepEqual(pinTo(full, "x", 2).moved, { key: "l1", slot: null });  // nowhere to go: unpinned
+  assert.deepEqual(pinTo(["a"], "x", 0).pins, ["a"]);
+});
+
+test("pins: moving swaps with the next slot, empty ones included", () => {
+  assert.deepEqual(movePin([null, "b"], "b", -1), ["b"]);
+  assert.deepEqual(movePin(["a"], "a", 1), [null, "a"]);
+  assert.deepEqual(movePin(["a"], "a", -1), ["a"]);
 });
 
 // ---- intake (name + goal proposal) ----
@@ -86,6 +115,16 @@ const index = [
   { id: "plenary-m2", goal: "Ship Plenary M2", dirs: ["/r/plenary"], projects: ["study"], tasks: [], feed: ["the parser is flaky"], touched: 900 },
   { id: "old", goal: "Old idea", dirs: [], projects: [], tasks: [], feed: [], touched: 10 },
 ];
+
+test("loopEntries: a pin whose loop isn't found still shows, at its slot, so you can unpin it", () => {
+  const e = loopEntries([], [{ id: "here", goal: "g" }], [null, "vana/gone", "here", "old-local"]);
+  const by = Object.fromEntries(e.map((x) => [x.key, x]));
+  assert.equal(by["here"].pin, 3);
+  assert.equal(by["here"].stale, undefined);
+  assert.deepEqual([by["vana/gone"].pin, by["vana/gone"].stale, by["vana/gone"].machine, by["vana/gone"].id], [2, true, "vana", "gone"]);
+  assert.deepEqual([by["old-local"].pin, by["old-local"].stale, by["old-local"].machine], [4, true, null]);
+  assert.deepEqual(pickerRows(e, "").filter((r) => r.kind === "loop").map((r) => r.entry.key), ["vana/gone", "here", "old-local"]);
+});
 
 test("loopEntries: running loops plus folders with nobody running; remote keys keep their machine", () => {
   const e = loopEntries(view, index, ["plenary-m2"]);
