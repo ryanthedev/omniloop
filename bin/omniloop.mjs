@@ -1099,13 +1099,15 @@ async function cmdWatch({ flags }) {
     await Promise.all([...terms.keys()].map(async (a) => { const t = await turnRecord(a); if (t) turns[a] = t; }));
     // A console made in a loop's space joins that loop (core/watch.js adoptions). Not in a dry run or a one-loop watcher.
     if (!quiet && !loop && Object.keys(newConsoles).length) {
-      const a = adoptions(newConsoles, [...terms.values()], Date.now());
+      const candidates = newConsoles;
+      const a = adoptions(candidates, [...terms.values()], Date.now());
       newConsoles = a.keep;
       for (const { address, loop: l, to, job } of a.adopt) {
+        const seenAt = candidates[address];
         const kv = [`${LABEL.loop}=${l}`, ...(to ? [`${LABEL.reportsTo}=${to}`] : []), ...(job ? [`omniloop.job=${job}`] : []), `${ADOPTED}=1`];
         await hc(["label", address, ...kv], { json: false })
           .then(() => log("ADOPT", address, `joined ${l}${to ? `, reports to ${to}` : ""}`))
-          .catch((e) => log("ADOPT", address, `failed: ${String(e.message ?? e).slice(0, 100)}`));
+          .catch((e) => { newConsoles[address] = seenAt; log("ADOPT", address, `failed, will retry: ${String(e.message ?? e).slice(0, 100)}`); }); // back in, with its original time: retried until the 60 s give-up
       }
     }
     const r = step(state, [...terms.values()], Date.now(), { loop, turns });

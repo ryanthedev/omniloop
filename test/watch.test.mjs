@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { initState, step, parseDuration, STALL_MS, START_MS, startingClaude, sendFailed, hold, withoutReplies, REPLY_WAIT_MS, adoptions, ADOPT_AFTER_MS, ADOPT_WITHIN_MS } from "../core/watch.js";
+import { initState, step, parseDuration, STALL_MS, START_MS, startingClaude, sendFailed, hold, withoutReplies, REPLY_WAIT_MS, adoptions, whereOf, ADOPT_AFTER_MS, ADOPT_WITHIN_MS } from "../core/watch.js";
 import { ESCALATE_MS } from "../core/omniloop.js";
 
 const T = (address, status, labels = {}, extra = {}) =>
@@ -433,7 +433,8 @@ test("a typed note never carries an agent's relayed reply", () => {
 // ---- adoptions: a console made in a loop's space joins that loop -------------------------------
 
 const NAMES = { spA: "m2", spB: "other", spC: "loose" };
-const SP = (space, labels = {}, tab = "3") => ({ "herdr.space": space, where: `${NAMES[space]} / ${tab}`, ...labels });
+let tabN = 0; // each call is a tab of its own, unless a test passes the same `htab` to put terminals in one tab
+const SP = (space, labels = {}, tab = "3", htab = `tab${++tabN}`) => ({ "herdr.space": space, "herdr.tab": htab, where: `${NAMES[space]} / ${tab}`, ...labels });
 const room = () => [
   T("t1", "done", SP("spA", L({ "omniloop.lead": "1" }))),
   T("t2", "working", SP("spA", L({ "omniloop.to": "t1" }))),
@@ -449,6 +450,21 @@ test("adopt: a new console in a loop's space joins it, reporting to the lead", (
   assert.equal(adoptions({ t5: 0 }, [...room(), T("t5", null, SP("spA"))], ADOPT_AFTER_MS).adopt[0].job, null);
 });
 
+test("adopt: a pane split of a tab that has other terminals isn't a new tab; a tab id that arrives late still counts", () => {
+  const split = [...room(), T("t5", null, SP("spA", {}, "lead", "tabX")), T("t6", null, SP("spA", L({ "omniloop.lead": "1" }), "lead", "tabX"))];
+  assert.deepEqual(adoptions({ t5: 0 }, split, ADOPT_AFTER_MS), { adopt: [], keep: {} });
+  // A split alone in its tab (the sibling is gone) is just a tab.
+  const alone = [...room(), T("t5", null, SP("spA", {}, "lead", "tabX")), T("t6", null, SP("spA", L(), "lead", "tabX"), { state: "finished" })];
+  assert.equal(adoptions({ t5: 0 }, alone, ADOPT_AFTER_MS).adopt.length, 1);
+  const noTab = { ...SP("spA", {}, "agy") }; delete noTab["herdr.tab"];
+  assert.deepEqual(adoptions({ t5: 0 }, [...room(), T("t5", null, noTab)], ADOPT_AFTER_MS), { adopt: [], keep: { t5: 0 } });
+});
+
+test("whereOf splits on the first ' / ' (a tab name may contain one)", () => {
+  assert.deepEqual(whereOf({ labels: { where: "m2 / fix a / b" } }), { space: "m2", tab: "fix a / b" });
+  assert.deepEqual(whereOf({ labels: {} }), { space: null, tab: null });
+});
+
 test("adopt: waits a moment, so a terminal its maker labels right away is left alone", () => {
   const ts = [...room(), T("t5", null, SP("spA"))];
   assert.deepEqual(adoptions({ t5: 0 }, ts, ADOPT_AFTER_MS - 1), { adopt: [], keep: { t5: 0 } });
@@ -458,7 +474,7 @@ test("adopt: waits a moment, so a terminal its maker labels right away is left a
 
 test("adopt: only the loop's own space (named after it), not a space its members merely sit in", () => {
   const borrowed = [T("t1", "done", { "herdr.space": "spP", where: "plenary / 1", omniloop: "m2", "omniloop.lead": "1" }),
-    T("t5", null, { "herdr.space": "spP", where: "plenary / 5" })];
+    T("t5", null, { "herdr.space": "spP", "herdr.tab": "tabP5", where: "plenary / 5" })];
   assert.deepEqual(adoptions({ t5: 0 }, borrowed, ADOPT_AFTER_MS), { adopt: [], keep: {} });
 });
 

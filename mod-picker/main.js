@@ -17,7 +17,7 @@ import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { terminals, theme, run, exec, home, readTextFile, props, closeOverlay, shared, setShared, notify, nextCommand } from "herdr";
 import { buildView, ago } from "./core/view.js";
-import { folderRows, projectRows, machineRows, newLoopCommand, leadAddress, clampAt, loopEntries, pickerRows, suggestLoops, LOCAL_NAME } from "./core/picker.js";
+import { folderRows, projectRows, machineRows, newLoopCommand, leadAddress, clampAt, loopEntries, pickerRows, suggestLoops, screenLines, screenLabel, LOCAL_NAME } from "./core/picker.js";
 import { matchProjects, strongMatches } from "./core/projects.js";
 import { PINS_KEY, sanitizePins, togglePin, movePin, pinTo } from "./core/pins.js";
 import { cleanId, fallbackProposal } from "./core/intake.js";
@@ -48,6 +48,7 @@ export default class OmniloopPicker extends View {
     this.query = "";
     this.at = 0;
     this.index = [];            // this computer's loop folders (omniloop index)
+    this.indexState = "loading"; // "loading" | "loaded" | "failed": a pinned idle loop is only "not found" once "loaded"
     this.fresh = null;          // the new loop: { goal, proposal, pending, id, finalGoal, field, edited }
     this.picked = [];
     this.folders = [];
@@ -85,7 +86,7 @@ export default class OmniloopPicker extends View {
       // ⌘↵ pressed before the machines were known: go on now, so the machine step isn't skipped.
       if (this.pendingNew != null) { const g = this.pendingNew; this.pendingNew = null; this.startNew(g, cx); }
       cx.notify();
-      try { this.index = JSON.parse((await exec(`${BIN}/omniloop`, ["index"], { timeout: 10000 })).stdout || "[]"); } catch {}
+      try { this.index = JSON.parse((await exec(`${BIN}/omniloop`, ["index"], { timeout: 10000 })).stdout || "[]"); this.indexState = "loaded"; } catch { this.indexState = "failed"; }
       cx.notify();
       await this.loadContext(null);
       cx.notify();
@@ -108,18 +109,19 @@ export default class OmniloopPicker extends View {
   pins() { return sanitizePins(shared(PINS_KEY)); }
 
   view() { return buildView(terminals(), this.watcher, Date.now(), shared("omniloop.withYou") ?? {}); }
-  entries() { return loopEntries(this.view().loops, this.index, this.pins(), this.localName); }
+  entries() { return loopEntries(this.view().loops, this.index, this.pins(), this.localName, { indexLoaded: this.indexState === "loaded", indexFailed: this.indexState === "failed" }); }
 
   // ---- loops ----
 
   open(entry, cx) {
-    if (entry.stale) { this.error = `Pinned at ${entry.pin}, but ${entry.key} isn't found${entry.machine ? ` (nobody is running in it on ${entry.machine})` : ""}. ⌘P unpins it.`; return; }
+    if (entry.placeholder) { this.error = entry.placeholder === "loading" ? `Still reading your loop folders… ${entry.key} will show in a moment.` : "Couldn't read your loop folders, so this pin can't be opened from here."; cx?.notify(); return; }
+    if (entry.stale) { this.error = `Pinned at ${entry.pin}, but ${entry.key} isn't found${entry.machine ? ` (nobody is running in it on ${entry.machine})` : ""}. ⌘P unpins it.`; cx?.notify(); return; }
     if (entry.lead) { this.close(); run("pane.focus", { terminal: entry.lead }); return; }
     // Nobody is running in it: start a fresh lead that catches up from the loop's notes (omniloop revive).
     // Only this computer's loops: another machine's loop is never started or read from here.
-    if (entry.machine) { this.error = `Nobody is running in ${entry.key}; start it on ${entry.machine}.`; return; }
+    if (entry.machine) { this.error = `Nobody is running in ${entry.key}; start it on ${entry.machine}.`; cx?.notify(); return; }
     if (this.reviving) return;
-    this.reviving = entry.id; this.error = `Starting a fresh lead in ${entry.id}…`;
+    this.reviving = entry.id; this.error = `Starting a fresh lead in ${entry.id}…`; cx?.notify();
     cx?.spawn(async (cx) => {
       try {
         const r = await exec(`${BIN}/omniloop`, ["revive", entry.id], { timeout: 60000 });
@@ -195,7 +197,7 @@ export default class OmniloopPicker extends View {
   }
 
   go(step, text, cx) {
-    this.step = step; this.at = 0;
+    this.step = step; this.at = 0; this.hovered = null;
     this.makeInput(step, text ?? ""); this.query = text ?? "";
     cx.notify();
   }
@@ -392,7 +394,7 @@ export default class OmniloopPicker extends View {
   loopRow(t, r, on, i) {
     const e = r.entry;
     const n = e.members.length;
-    const when = e.stale ? "not found · ⌘P unpins" : e.running ? (e.ago ? `you ${e.ago}` : "you: never") : (e.touched ? `idle ${ago(e.touched, Date.now())} · Enter starts a lead` : "idle · Enter starts a lead");
+    const when = e.placeholder ? "" : e.stale ? "not found · ⌘P unpins" : e.running ? (e.ago ? `you ${e.ago}` : "you: never") : (e.touched ? `idle ${ago(e.touched, Date.now())} · Enter starts a lead` : "idle · Enter starts a lead");
     return h_flex().id(`pk-${e.key}`).h(60).px(18).gap(14).items_center().rounded(12).cursor_pointer()
       .bg(on ? t.raised : t.background).border(1).border_color(on ? t.accent : t.background)
       .on_hover((h, cx) => this.hover(h ? e : null, e.key, cx))
@@ -404,7 +406,7 @@ export default class OmniloopPicker extends View {
           .child(div().text_size(15).font_semibold().text_color(e.running ? t.foreground : t.muted).child(e.id))
           .child(this.chip(t, e.where ?? e.machine ?? this.localName, t.dim))
           .when(e.needsYou > 0, (el) => el.child(this.chip(t, e.forYouLabel || `${e.needsYou} for you`, t.blocked))))
-        .child(div().text_size(12.5).text_color(r.why ? t.accent : t.muted).truncate().child(r.why ?? (e.stale ? (e.machine ? `pinned, but nobody is running in it on ${e.machine}` : "pinned, but no loop by this name (removed or renamed?)") : e.goal ?? ""))))
+        .child(div().text_size(12.5).text_color(r.why ? t.accent : t.muted).truncate().child(r.why ?? (e.placeholder ? (e.placeholder === "loading" ? "pinned · loading…" : "couldn't read your loop folders") : e.stale ? (e.machine ? `pinned, but nobody is running in it on ${e.machine}` : "pinned, but no loop by this name (removed or renamed?)") : e.goal ?? ""))))
       .child(v_flex().flex_none().items_end().gap(2)
         .child(div().text_size(11.5).text_color(e.ago ? t.muted : t.dim).child(when))
         .when(e.running, (el) => el.child(div().text_size(11).text_color(t.dim).child(`${n} session${n === 1 ? "" : "s"}`))));
@@ -440,20 +442,25 @@ export default class OmniloopPicker extends View {
   /** The pointer entered (entry) or left (null) loop row `key`. Leaving one row only clears its own preview, so moving
    *  between rows never flickers. The lead's screen is read once a second at most per loop. */
   hover(entry, key, cx) {
-    if (!entry) { if (this.hovered?.key === key) { this.hovered = null; cx.notify(); } return; }
-    this.hovered = entry; cx.notify();
-    const lead = entry.lead, seen = this.screens?.[entry.key];
+    if (this.step !== "ask") return;
+    if (!entry) { if (this.hovered === key) { this.hovered = null; cx.notify(); } return; }
+    this.hovered = key; cx.notify();
+    const lead = entry.lead, seen = this.screens?.[key];
     if (!lead || (seen && Date.now() - seen.at < 1000)) return;
-    this.screens = { ...(this.screens ?? {}), [entry.key]: { at: Date.now(), lines: seen?.lines ?? null } };
+    this.screens = { ...(this.screens ?? {}), [key]: { at: Date.now(), lines: seen?.lines ?? null } };
     cx.spawn(async (cx) => {
       try {
         const r = await exec(this.hc(), ["read", lead], { timeout: 4000 });
-        const lines = (r.stdout ?? "").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").split("\n").map((l) => l.replace(/\s+$/, ""));
-        while (lines.length && !lines[lines.length - 1]) lines.pop();
-        this.screens[entry.key] = { at: Date.now(), lines: lines.slice(-14) };
-      } catch { this.screens[entry.key] = { at: Date.now(), lines: [] }; }
+        this.screens[key] = { at: Date.now(), lines: r.code === 0 ? screenLines(r.stdout) : false };
+      } catch { this.screens[key] = { at: Date.now(), lines: false }; }
       cx.notify();
     });
+  }
+
+  /** The hovered loop's entry, looked up in the current rows (null when it has gone, or outside the search step). */
+  hoveredEntry() {
+    if (this.step !== "ask" || !this.hovered) return null;
+    return this.rows().find((r) => r.kind === "loop" && r.entry.key === this.hovered)?.entry ?? null;
   }
 
   /** The preview card for the hovered loop: goal, sessions with their status, recent chat, the lead's screen. */
@@ -467,7 +474,7 @@ export default class OmniloopPicker extends View {
         .when(Boolean(e.pin), (el) => el.child(this.chip(t, String(e.pin), t.accent)))
         .child(div().flex_1().min_w(0).truncate().text_size(15).font_semibold().text_color(t.foreground).child(e.id))
         .child(this.chip(t, e.where ?? e.machine ?? this.localName, t.dim)))
-      .child(div().text_size(12.5).text_color(t.muted).child(e.stale ? "Pinned, but not found. ⌘P on its row unpins it." : e.goal || "No goal written"))
+      .child(div().text_size(12.5).text_color(t.muted).child(e.placeholder ? (e.placeholder === "loading" ? "Pinned. Loading…" : "Couldn't read your loop folders.") : e.stale ? "Pinned, but not found. ⌘P on its row unpins it." : e.goal || "No goal written"))
       .when(rows.length > 0, (el) => el.child(label(`SESSIONS (${rows.length})`)).children(rows.slice(0, 6).map((m) =>
         h_flex().gap(8).items_center().pl(m.depth * 12)
           .child(this.dot(t, m.status, true))
@@ -476,9 +483,10 @@ export default class OmniloopPicker extends View {
           .when(Boolean(m.forYouLabel), (x) => x.child(div().text_size(11).text_color(t.blocked).child(m.forYouLabel))))))
       .when(e.tasks.length > 0, (el) => el.child(label("OPEN TASKS")).children(e.tasks.slice(0, 3).map((x) => div().truncate().text_size(12).text_color(t.muted).child(`· ${x}`))))
       .when(e.feed.length > 0, (el) => el.child(label("RECENT CHAT")).children(e.feed.slice(-3).map((x) => div().truncate().text_size(12).text_color(t.muted).child(x))))
-      .when(Boolean(e.lead), (el) => el.child(label(`LEAD'S SCREEN · ${e.lead}`))
+      .when(Boolean(e.lead), (el) => el.child(label(screenLabel(Boolean(live?.lead), e.lead)))
         .child(v_flex().p(8).rounded(8).bg(t.background).overflow_hidden().children(screen == null
           ? [div().text_size(11).text_color(t.dim).child("Reading…")]
+          : screen === false ? [div().text_size(11).text_color(t.dim).child("Couldn't read the screen")]
           : screen.length ? screen.map((l) => div().h(15).whitespace_nowrap().overflow_hidden().font_family("Menlo").text_size(10.5).text_color(t.muted).child(l || " "))
           : [div().text_size(11).text_color(t.dim).child("Nothing on screen")])));
   }
@@ -574,7 +582,7 @@ export default class OmniloopPicker extends View {
         })))
         .when(rows.length > shown.length, (el) => el.child(div().px(4).text_size(11.5).text_color(t.dim).child(`${rows.length - shown.length} more; keep typing to narrow`))))
         .when(this.step === "ask", (el) => el.child(div().w(360).flex_none().pt(96).pr(20)
-          .child(this.hovered ? this.preview(t, this.hovered) : div().pt(150).px(16).text_size(12).text_color(t.dim).child("Hover a loop to preview it")))))
+          .child(this.hoveredEntry() ? this.preview(t, this.hoveredEntry()) : div().pt(150).px(16).text_size(12).text_color(t.dim).child("Hover a loop to preview it")))))
       .child(div().flex_1())
       .child(h_flex().pb(22).gap(10).items_center()
         .child(div().text_size(12).text_color(t.dim).child(this.hints()))

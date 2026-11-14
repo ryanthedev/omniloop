@@ -111,7 +111,10 @@ unrelated loop ("top of the list") and the loop tab bar dropped it. So the watch
 `omniloop-watch`, gets `omniloop=<id>`, `omniloop.to=<lead>` (no `to` when you lead) and `omniloop.job=<tab name>`
 (none when Herdr only numbered the tab) and `omniloop.adopted=1` (its first prompt is a person's, not a task) when it sits in the loop's **own** space (the one named after it, read from
 the `where` label) and every live, labelled, unretired member in that space belongs to the loop. A space the loop's
-members merely sit in (plenary-m2's members in the `plenary` space) adopts nothing. It waits 3 s
+members merely sit in (plenary-m2's members in the `plenary` space) adopts nothing. Only a terminal **alone in its
+tab** is adopted: if another live terminal shares its `herdr.tab` label it is a pane split (⌘D, the leader's "scrollback
+in nvim") of a tab that already has terminals, and is left alone; one with no `herdr.tab` yet waits like one with no
+`herdr.space`. A failed `hc label` puts it back to retry until the give-up. It waits 3 s
 (`ADOPT_AFTER_MS`; the watcher ticks again then), so a terminal its maker labels right after making it (`omniloop new`
 starting a lead with `tab.new`) is left alone, and gives up after 60 s. `omniloop leave --terminal <t>` undoes it and
 sticks. Only the all-loops watcher adopts (not `--loop` or `--dry-run`). Once adopted it is a member like any other:

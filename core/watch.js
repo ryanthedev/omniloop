@@ -272,7 +272,7 @@ export const ADOPT_WITHIN_MS = 60 * 1000;
 /** The Herdr space and tab a terminal sits in, from its `where` label ("<space> / <tab>"), or nulls. */
 export function whereOf(t) {
   const w = t?.labels?.where ?? "";
-  const i = w.lastIndexOf(" / ");
+  const i = w.indexOf(" / ");
   return i < 0 ? { space: null, tab: null } : { space: w.slice(0, i), tab: w.slice(i + 3) };
 }
 
@@ -280,7 +280,9 @@ export function whereOf(t) {
  * A console made in a loop's own space (Herdr's + menu: `tab.new`, which sets no omniloop labels) joins that loop,
  * reporting to its lead. Only new consoles (`candidates`: address -> when the watcher saw it created), so what was
  * already open is never swept in, and `omniloop leave` sticks. A loop's own space is the one named after it, and
- * every live, labelled member on this machine in it must belong to that loop. Returns { adopt: [{ address, loop,
+ * every live, labelled member on this machine in it must belong to that loop. Only a terminal alone in its tab is
+ * adopted (a new tab, not a ⌘D split or the leader's scrollback split of a tab that already has terminals): no other
+ * live terminal shares its `herdr.tab`. Returns { adopt: [{ address, loop,
  * to, job }], keep: candidates still waiting }. `to` is null when the loop has no lead (you lead it); `job` is the
  * tab's name unless Herdr only numbered it.
  */
@@ -295,7 +297,9 @@ export function adoptions(candidates, terminals, now) {
     if (!live(t) || !local(t) || t.labels?.[LABEL.loop] || t.labels?.[LABEL.retired] || t.parent || t.name === "omniloop-watch") continue;
     if (now - seen > ADOPT_WITHIN_MS) continue;
     const space = t.labels?.["herdr.space"], where = whereOf(t);
-    if (!space || !where.space || now - seen < ADOPT_AFTER_MS) { keep[address] = seen; continue; }
+    const tab = t.labels?.["herdr.tab"];
+    if (!space || !tab || !where.space || now - seen < ADOPT_AFTER_MS) { keep[address] = seen; continue; }
+    if (ts.some((x) => x !== t && live(x) && x.labels?.["herdr.tab"] === tab)) continue; // a split of a tab that has other terminals
     const loops = new Set(ts.filter((x) => x !== t && live(x) && local(x) && !x.labels?.[LABEL.retired] && x.labels?.["herdr.space"] === space && x.labels?.[LABEL.loop])
       .map((x) => x.labels[LABEL.loop]));
     if (loops.size !== 1) { if (!loops.size) keep[address] = seen; continue; }

@@ -145,8 +145,11 @@ const baseName = (p) => String(p ?? "").split("/").filter(Boolean).pop() ?? "";
  * and this computer's loop folders (`omniloop index --json`: [{ id, goal, dirs, projects, tasks, feed, touched }]),
  * so a loop with nobody running still shows and can be searched. Entry:
  * { key, id, machine, goal, lead, needsYou, status, ago, lastWithYou, touched, running, members, dirs, projects, tasks, feed, pin }
+ * `indexLoaded`: the index has been read. Until then (or if reading failed) a pinned local loop with nobody running
+ * can't be told from a removed one, so it is a quiet placeholder (`placeholder: "loading" | "unreadable"`), never
+ * `stale`; `stale` (a pin to drop) is only for a local key once the index is in, or a remote key at any time.
  */
-export function loopEntries(viewLoops = [], index = [], pins = [], local = LOCAL_NAME) {
+export function loopEntries(viewLoops = [], index = [], pins = [], local = LOCAL_NAME, { indexLoaded = false, indexFailed = false } = {}) {
   const byId = new Map(index.map((x) => [x.id, x]));
   const out = [];
   for (const l of viewLoops) {
@@ -172,8 +175,10 @@ export function loopEntries(viewLoops = [], index = [], pins = [], local = LOCAL
     if (seen.has(key)) continue;
     const i = key.indexOf("/");
     const machine = i < 0 ? null : key.slice(0, i);
+    const unknown = !machine && !indexLoaded;
     out.push({ key, where: machine ?? local, id: machine ? key.slice(i + 1) : key, machine, goal: "", lead: null, needsYou: 0, forYouLabel: "", status: null, ago: null,
-      lastWithYou: null, touched: null, running: false, stale: true, members: [], dirs: [], projects: [], tasks: [], feed: [], pin: slot });
+      lastWithYou: null, touched: null, running: false, ...(unknown ? { placeholder: indexFailed ? "unreadable" : "loading" } : { stale: true }),
+      members: [], dirs: [], projects: [], tasks: [], feed: [], pin: slot });
   }
   return out;
 }
@@ -218,7 +223,7 @@ const pinOrder = (a, b) => (a.pin ?? 99) - (b.pin ?? 99);
  * changed). A query: every loop that fuzzy-matches, best first (pins, then recency, break ties), each with a short
  * `why`. Rows: { kind: "loop", entry, why } then { kind: "new", id, goal } (first and alone when nothing matches).
  */
-export function pickerRows(entries, query, takenIds = entries.filter((e) => !e.machine).map((e) => e.id)) {
+export function pickerRows(entries, query, takenIds = entries.filter((e) => !e.machine && !e.stale).map((e) => e.id)) {
   const { machine, rest: q } = splitMachine(query);
   entries = entries.filter((e) => onMachine(e, machine));
   let found;
@@ -242,7 +247,7 @@ export function suggestLoops(entries, goal, n = 3) {
   const ws = [...new Set(tokens(goal).map((w) => w.replace(/[^a-z0-9-]/g, "")).filter((w) => w.length >= 3 && !SUGGEST_STOP.has(w)))];
   if (!ws.length) return [];
   const need = ws.length <= 2 ? 1 : 2;
-  const scored = entries.map((e) => {
+  const scored = entries.filter((e) => !e.stale && !e.placeholder).map((e) => {
     const hay = [e.id, e.goal, ...e.dirs.map(baseName), ...e.projects];
     const names = new Set([e.id, ...e.dirs.map(baseName), ...e.projects].map((x) => String(x).toLowerCase()));
     let hits = 0, score = 0, exact = 0;
@@ -255,4 +260,16 @@ export function suggestLoops(entries, goal, n = 3) {
   }).filter((x) => x.hits >= need || x.exact > 0);
   scored.sort((a, b) => b.exact - a.exact || b.hits - a.hits || b.score - a.score || recency(a.e, b.e));
   return scored.slice(0, n).map((x) => x.e);
+}
+
+/** The last `n` lines of `hc read` output as text lines: ANSI stripped, "[hc] " notices dropped, trailing blanks cut. */
+export function screenLines(stdout, n = 14) {
+  const lines = String(stdout ?? "").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").split("\n").filter((l) => !l.startsWith("[hc] ")).map((l) => l.replace(/\s+$/, ""));
+  while (lines.length && !lines[lines.length - 1]) lines.pop();
+  return lines.slice(-n);
+}
+
+/** The preview's screen heading: "LEAD'S SCREEN" only for a loop whose view has a real lead (its `.lead` terminal), else "SCREEN · <address>". */
+export function screenLabel(hasLead, address) {
+  return hasLead ? "LEAD'S SCREEN" : `SCREEN · ${address}`;
 }

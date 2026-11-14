@@ -117,13 +117,36 @@ const index = [
 ];
 
 test("loopEntries: a pin whose loop isn't found still shows, at its slot, so you can unpin it", () => {
-  const e = loopEntries([], [{ id: "here", goal: "g" }], [null, "vana/gone", "here", "old-local"]);
+  const e = loopEntries([], [{ id: "here", goal: "g" }], [null, "vana/gone", "here", "old-local"], undefined, { indexLoaded: true });
   const by = Object.fromEntries(e.map((x) => [x.key, x]));
   assert.equal(by["here"].pin, 3);
   assert.equal(by["here"].stale, undefined);
   assert.deepEqual([by["vana/gone"].pin, by["vana/gone"].stale, by["vana/gone"].machine, by["vana/gone"].id], [2, true, "vana", "gone"]);
   assert.deepEqual([by["old-local"].pin, by["old-local"].stale, by["old-local"].machine], [4, true, null]);
   assert.deepEqual(pickerRows(e, "").filter((r) => r.kind === "loop").map((r) => r.entry.key), ["vana/gone", "here", "old-local"]);
+});
+
+test("loopEntries: before the index loads, a pinned local loop is a quiet placeholder, not stale; remote keys may be stale", () => {
+  const pins = ["idle-one", "vana/gone"];
+  const by = (e) => Object.fromEntries(e.map((x) => [x.key, x]));
+  let e = by(loopEntries([], [], pins));
+  assert.deepEqual([e["idle-one"].placeholder, e["idle-one"].stale, e["idle-one"].pin], ["loading", undefined, 1]);
+  assert.deepEqual([e["vana/gone"].stale, e["vana/gone"].placeholder], [true, undefined]);
+  e = by(loopEntries([], [], pins, undefined, { indexFailed: true }));
+  assert.deepEqual([e["idle-one"].placeholder, e["idle-one"].stale], ["unreadable", undefined]);
+  // Once loaded, an idle pinned loop that is in the index is a normal entry; one that isn't is stale.
+  e = by(loopEntries([], [{ id: "idle-one", goal: "g" }], ["idle-one", "nope"], undefined, { indexLoaded: true }));
+  assert.deepEqual([e["idle-one"].stale, e["idle-one"].placeholder, e["nope"].stale], [undefined, undefined, true]);
+});
+
+test("stale entries aren't taken ids and aren't suggested", () => {
+  const e = loopEntries([], [{ id: "real", goal: "build the parser", dirs: [], projects: [] }], ["parser-gone", "vana/parser-x"], undefined, { indexLoaded: true });
+  assert.ok(e.find((x) => x.key === "parser-gone").stale);
+  const fresh = pickerRows(e, "parser gone").at(-1);
+  assert.equal(fresh.id, "parser-gone"); // the removed loop's name is free again
+  assert.deepEqual(suggestLoops(e, "parser-gone parser").map((x) => x.key), ["real"]);
+  const loading = loopEntries([], [], ["parser-gone"]);
+  assert.deepEqual(suggestLoops(loading, "parser-gone"), []);
 });
 
 test("loopEntries: running loops plus folders with nobody running; remote keys keep their machine", () => {
@@ -256,4 +279,12 @@ test("@filter: the new-loop row carries only the words after the @token", () => 
   const rows = pickerRows(mk(), "@ska zebra");
   assert.deepEqual(rows.map((r) => r.kind), ["new"]);
   assert.equal(rows[0].goal, "zebra");
+});
+
+test("screenLines: strips ANSI and '[hc] ' notices, trailing blanks, keeps the last n; screenLabel names a real lead only", async () => {
+  const { screenLines, screenLabel } = await import("../core/picker.js");
+  assert.deepEqual(screenLines("[hc] note\n\x1b[1mone\x1b[0m  \ntwo\n\n\n"), ["one", "two"]);
+  assert.deepEqual(screenLines("a\nb\nc\nd", 2), ["c", "d"]);
+  assert.equal(screenLabel(true, "t1"), "LEAD'S SCREEN");
+  assert.equal(screenLabel(false, "t1"), "SCREEN · t1");
 });
