@@ -816,6 +816,8 @@ const BRIEF = `omniloop: you are in a loop (a piece of work with one coordinator
   omniloop send <t> "<text>"              message a subagent or your coordinator (arrives labelled as you, not as the user)
   omniloop sessions                       Claude sessions you can send to (address, name, pid)
   hc read <t>                             see a subagent's screen
+Cheap helpers (spend Gemini $, not Claude quota; Agent tool): sdd:gemini-judge ranks/filters/checks a batch, sdd:video-digest
+turns a video into a digest, sdd:spend-watch reports spend and limits (run it before a big fan-out).
 Rules: end your turn when you wait; the watcher types a one-line note into you when a subagent blocks,
 finishes or stalls ("omniloop: t3 blocked (question): ..."). Never poll, sleep or loop on hc wait.
 Only the coordinator (and needs-you) reaches the user; answer your subagents' questions yourself.

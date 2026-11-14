@@ -173,6 +173,9 @@ The main agent only coordinates for the user and writes no code itself. It dispa
 - **Review:** \`code-foundations:post-gate-agent\`, on Opus. An independent review of every build before it counts as done.
 - **Research:** the Explore agent, or the \`code-foundations:research\` skill.
 - **Plan:** the \`code-foundations:plan\` skill. Plans feed \`code-foundations:build\`.
+- **Judge, rank, triage:** \`sdd:gemini-judge\`. Ranks, filters or checks a batch (files, screenshots, videos, candidates) with Gemini Decisions for fractions of a cent, so deciding what to do next never burns Claude quota.
+- **Videos:** \`sdd:video-digest\`. A video URL or file into a transcript-plus-visuals digest; falls back to Gemini when agy is out of quota.
+- **Spend:** \`sdd:spend-watch\`. Gemini dollars, Claude governor state and codex quota in one answer. Run it before a large fan-out or a long loop.
 
 Keep tasks current so the user can follow along in the panel and in \`omniloop task ls\`:
 
