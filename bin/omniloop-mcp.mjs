@@ -8,14 +8,15 @@ import { createInterface } from "node:readline";
 import { handleLine } from "../core/mcp.js";
 import { feedEntry, feedLine, parseFeed, FEED_FILE } from "../core/feed.js";
 import { loopHome, validId } from "../core/loopdir.js";
+import { selfId } from "../core/backend.js";
 import { deliver, liveSessions, hookRecords, myAddress, TURNS_DIR } from "./lib/sock.mjs";
 
 
 const needText = (v, what) => { if (typeof v !== "string" || !v.trim()) throw new Error(`${what} is required`); return v; };
 
-/** Who is calling: HC_TERMINAL_ID, else the registry name of this session (by its socket), else "agent". */
+/** Who is calling: HC_TERMINAL_ID or OMNI_PANE, else the registry name of this session (by its socket), else "agent". */
 async function sender() {
-  if (process.env.HC_TERMINAL_ID) return process.env.HC_TERMINAL_ID;
+  if (selfId(process.env)) return selfId(process.env);
   const sock = process.env.CLAUDE_CODE_MESSAGING_SOCKET;
   if (sock) {
     const n = (await liveSessions()).find((x) => x.messagingSocketPath === sock)?.name;

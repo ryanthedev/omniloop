@@ -1,6 +1,6 @@
 # omniloop
 
-Manage your work by what you're doing, not by space or agent. Stands alone: needs `hc` (herdr-core) and
+Manage your work by what you're doing, not by space or agent. Stands alone: needs `hc` (herdr-core) or `omni`, and
 node, plus the Herdr app for the view. The rules are in `SPEC.md`.
 
 | Path | What |
@@ -88,3 +88,11 @@ starts its coordinator on the goal instead of asking.
   loops, both "watcher off" and "watcher on".
 - Not done: nothing installed into the real Herdr, no real watcher running, sound untested, the view not
   yet tried as a docked pane (only as a pop-up), `handoff` and `start` not run against real Claude agents.
+
+## Backends
+
+omniloop talks to its terminals through one port (`bin/lib/backend/index.mjs`) with two adapters: `HerdrBackend` (`hc`, `herdr-app`;
+the default) and `OmniBackend` (the `omni` CLI of omni's loop surface). `OMNILOOP_BACKEND=omni|herdr` picks one; without it, omni is
+used when `OMNI_PANE` is set and `HC_TERMINAL_ID` is not. On omni, `OMNILOOP_DRAFT_WAIT_MS` (default 60000, 0 = off) bounds how long a
+typed note waits for a person's unsent draft (hc does this itself; `omni send` does not, so omniloop emulates it from `omni capture`).
+Labels stay omniloop's source of truth on both; on omni the loop (goal, folders) and pane placement are mirrored best effort.

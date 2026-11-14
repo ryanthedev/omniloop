@@ -1,11 +1,12 @@
 // sock.mjs: the I/O half of core/deliver.js. Reads Claude Code's session registry and the omniloop hook records,
-// and writes one labelled message to a session's messaging socket. No herdr needed: hc is only the fallback.
+// and writes one labelled message to a session's messaging socket. No herdr needed: the backend (hc, omni) is only the fallback.
 import { readFile, readdir, open } from "node:fs/promises";
 import { createConnection } from "node:net";
-import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { envelope, frames, resolveTarget, route, senderName, udsAddress } from "../../core/deliver.js";
+import { isPaneId, looksLikeAddress as isAddressWord, selfId } from "../../core/backend.js";
+import { selectBackend } from "./backend/index.mjs";
 
 export const CLAUDE_SESSIONS = process.env.OMNILOOP_CLAUDE_SESSIONS ?? join(homedir(), ".claude", "sessions");
 export const CACHE = process.env.OMNILOOP_HOME ?? join(homedir(), ".cache", "omniloop");
@@ -103,13 +104,13 @@ export async function locate(target) {
   // herdr knows the terminal's foreground process, which is the Claude session's pid.
   const t = String(target ?? "");
   const hookPidLive = byAddress[t] != null && sessions.some((s) => s.pid === Number(byAddress[t]));
-  if (/^t[0-9a-z]+$/.test(t) && !hookPidLive) {
+  if (isPaneId(t) && !hookPidLive) {
     const pid = await foregroundPid(t);
     if (pid != null && sessions.some((s) => s.pid === pid)) byAddress[t] = pid;
   }
   const r = resolveTarget(target, sessions, { byAddress });
   const hook = hooks[target] ?? Object.values(hooks).find((h) => r.session && h.pid === r.session.pid) ?? null;
-  const looksLikeAddress = /^[a-z][a-z0-9]*$/i.test(String(target)) && !r.session;
+  const looksLikeAddress = isAddressWord(target) && !r.session;
   // Unknown mode is not "prompting": a bypass session reached by name must still get hc, so read its transcript.
   const turn = hook ? await turnRecord(hook.address) : null;
   const fresher = turn?.mode && turn.sessionId === hook?.sessionId && (turn.endedAt ?? turn.startedAt ?? 0) > (hook?.at ?? 0) ? turn.mode : null;
@@ -153,21 +154,14 @@ export async function deliver(target, { from, text, replyTo = process.env.CLAUDE
   throw new Error(where.error ?? `can't reach ${target}`);
 }
 
-/** This session's own omniloop address (the key of its turn record): HC_TERMINAL_ID, else its hook record's. */
+/** This session's own omniloop address (the key of its turn record): HC_TERMINAL_ID or OMNI_PANE, else its hook record's. */
 export async function myAddress() {
-  if (process.env.HC_TERMINAL_ID) return process.env.HC_TERMINAL_ID;
+  if (selfId(process.env)) return selfId(process.env);
   const sock = process.env.CLAUDE_CODE_MESSAGING_SOCKET;
   if (!sock) return null;
   const pid = (await liveSessions()).find((x) => x.messagingSocketPath === sock)?.pid;
   return pid == null ? null : Object.values(await hookRecords()).find((h) => h.pid === pid)?.address ?? null;
 }
 
-/** The pid of the program in front in an hc terminal on this computer, or null (no hc, no such terminal). */
-export function foregroundPid(address, { timeoutMs = 3000 } = {}) {
-  return new Promise((resolve) => {
-    execFile("hc", ["get", "--json", address], { timeout: timeoutMs, maxBuffer: 4 << 20 }, (err, out) => {
-      if (err) return resolve(null);
-      try { const p = JSON.parse(out)?.foreground?.pid; resolve(Number.isInteger(p) ? p : null); } catch { resolve(null); }
-    });
-  });
-}
+/** The pid of the program in front in a backend terminal on this computer, or null (no backend, no such terminal). */
+export const foregroundPid = (address, { timeoutMs = 3000, backend = selectBackend() } = {}) => backend.foregroundPid(address, { timeoutMs });

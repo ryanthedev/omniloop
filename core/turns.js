@@ -3,6 +3,7 @@
 //   sessions/<address>.json  { address, pid, sessionId, mode, cwd, at }   who a session is, for delivery
 //   turns/<address>.json     { address, sessionId, pid, mode, startedAt, endedAt, text, first, given, reportedAt, reportedTo }
 import { sentTo } from "./deliver.js";
+import { selfId } from "./backend.js";
 
 /** Longest last-reply text kept in a turn record. */
 export const TEXT_MAX = 4000;
@@ -13,10 +14,10 @@ export function safeAddress(a) {
   return s && !/[/\\\0]/.test(s) && !s.includes("..") ? s : null;
 }
 
-/** The address of a session: its herdr terminal id, else "s-" + the first 8 chars of the session id. null when neither is usable. */
+/** The address of a session: its terminal id (herdr HC_TERMINAL_ID, omni OMNI_PANE), else "s-" + the first 8 chars of the session id. null when neither is usable. */
 export function addressOf(env, sessionId) {
-  const hc = safeAddress(env?.HC_TERMINAL_ID);
-  if (hc) return hc;
+  const id = safeAddress(selfId(env));
+  if (id) return id;
   const sid = String(sessionId ?? "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 8);
   return sid ? safeAddress("s-" + sid) : null;
 }

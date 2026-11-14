@@ -7,15 +7,17 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { selectBackend } from "./lib/backend/index.mjs";
+import { selfId } from "../core/backend.js";
 import { addressOf, pidOf, foreign } from "../core/turns.js";
 import { asksUser, lastAssistantText, isHumanPrompt, isLoopTerminal } from "../core/ask.js";
 
 const quiet = () => process.exit(0);
 process.on("uncaughtException", quiet);
 try {
-  const id = process.env.HC_TERMINAL_ID;
+  const id = selfId(process.env);
   if (!id) quiet();
+  const backend = selectBackend();
   const input = JSON.parse(readFileSync(0, "utf8") || "{}");
   // A nested `claude` inherits HC_TERMINAL_ID: when another live session already owns this terminal, say nothing
   // (the same rule as session-hook.mjs; its records are under $OMNILOOP_HOME/sessions).
@@ -27,17 +29,17 @@ try {
     if (foreign(prev, { input, pid: pidOf(process.env, process.ppid) }, alive)) quiet();
   }
   // The plugin may be loaded by the user's own alias, in any Claude: only a loop agent's terminal (label `omniloop`)
-  // gets labels. A failed or unreadable `hc get` counts as "not an agent".
+  // gets labels. A failed or unreadable terminal lookup (hc get, omni get) counts as "not an agent".
   try {
-    if (!isLoopTerminal(JSON.parse(execFileSync("hc", ["get", "--json", id], { timeout: 1500, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })))) quiet();
+    if (!isLoopTerminal(await backend.get(id, { timeoutMs: 1500 }))) quiet();
   } catch { quiet(); }
-  const label = (...kv) => execFileSync("hc", ["label", id, ...kv], { stdio: "ignore", timeout: 2500 });
+  const label = (...kv) => backend.label(id, kv, { timeoutMs: 2500 });
   if (input.hook_event_name === "Stop") {
     let text = typeof input.last_assistant_message === "string" ? input.last_assistant_message : "";
     if (!text && input.transcript_path) text = lastAssistantText(readFileSync(input.transcript_path, "utf8"));
-    label(`omniloop.ask=${asksUser(text) ? "1" : ""}`);
+    await label(`omniloop.ask=${asksUser(text) ? "1" : ""}`);
   } else if (input.hook_event_name === "UserPromptSubmit") {
-    label("omniloop.ask=", ...(isHumanPrompt(input.prompt) ? [`omniloop.you=${Date.now()}`] : []));
+    await label("omniloop.ask=", ...(isHumanPrompt(input.prompt) ? [`omniloop.you=${Date.now()}`] : []));
   }
 } catch {}
 quiet();

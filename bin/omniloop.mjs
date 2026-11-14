@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// omniloop: run work as loops of agents in herdr-core terminals. Needs only `hc` (herdr-core) and node.
+// omniloop: run work as loops of agents in terminals owned by a backend: herdr-core (`hc`) or omni (`omni`), see bin/lib/backend.
+// Needs only that backend's CLI and node.
 // Output is short on purpose: agents read it, and every line costs them tokens.
 
 import { spawn, execFile } from "node:child_process";
@@ -23,26 +24,20 @@ import { deliver, liveSessions, hookRecords, turnRecord, foregroundPid } from ".
 import { YOU, addTask, finishTask, giveTask, editTask, reopenTask, removeTask, openTasks, taskLines, taskNote, tasksOf } from "../core/tasks.js";
 import { claudeProjectKey, isLoopClaudeEntry, renamedManifest, renameText, withFormerlyNote, removeCheck, endedTempLoops, tempId, scrubHistory, NO_MEMORY_ENV, NO_MEMORY_TOOLS } from "../core/lifecycle.js";
 import { goalHint } from "../core/goalwords.js";
+import { selectBackend } from "./lib/backend/index.mjs";
 
 const run = promisify(execFile);
 const HOME = process.env.OMNILOOP_HOME ?? join(homedir(), ".cache", "omniloop");
 const TIMERS = join(HOME, "timers");
 const TICK_MS = 15_000;
-// hc send waits up to 60 s for a person's draft before typing; allow well past that.
-const SEND_TIMEOUT_MS = 180_000;
 const WATCHER_FRESH_MS = 45_000;
 
 // Start programs through the user's login shell, so they get the PATH and tools of a normal terminal.
 const viaLogin = (argv) => [process.env.SHELL || "/bin/sh", "-lc", 'exec "$@"', "omniloop", ...argv];
 
-async function hc(args, { json = true } = {}) {
-  // --json goes before any "--", or it becomes an argument of the program being started.
-  const cut = args.indexOf("--");
-  const full = !json ? args : cut < 0 ? [...args, "--json"] : [...args.slice(0, cut), "--json", ...args.slice(cut)];
-  const { stdout } = await run("hc", full, { maxBuffer: 64 << 20 });
-  return json ? JSON.parse(stdout) : stdout;
-}
-const me = () => process.env.HC_TERMINAL_ID || null;
+// Every terminal call goes through this port (HerdrBackend or OmniBackend; OMNILOOP_BACKEND=omni|herdr, see core/backend.js).
+const backend = selectBackend();
+const me = () => backend.self();
 const SHELL = process.env.SHELL || "/bin/sh";
 // This folder holds the `omniloop` command; agents get it on their PATH.
 const BIN = dirname(fileURLToPath(import.meta.url));
@@ -122,14 +117,6 @@ async function bootstrapHarnesses(home, manifest) {
   if (lines.length) console.log(`  harness config: ${lines.join("; ")}`);
 }
 
-/** The Herdr space named after the loop (on this computer), or null. */
-async function loopSpace(id) {
-  try {
-    const { stdout } = await run("herdr-app", ["ls"], { maxBuffer: 16 << 20 });
-    return JSON.parse(stdout).spaces.find((sp) => sp.name === id && !sp.machine) ?? null;
-  } catch { return null; }
-}
-
 /** Split a claude command line into its flags and its task: the last word, unless it's a flag or a flag's value. */
 function splitTask(argv) {
   const rest = argv.slice(1);
@@ -157,10 +144,16 @@ function parseArgs(argv) {
   return { flags, rest };
 }
 
-async function allTerminals() {
-  // hc ls --json leaves labels out; hc get has them.
-  const { terminals } = await hc(["ls"]);
-  return Promise.all(terminals.map((t) => hc(["get", t.address]).catch(() => null))).then((x) => x.filter(Boolean));
+const allTerminals = () => backend.list();
+
+/** Keep the backend's own loop (omni) in step with loop.json. Best effort: the labels stay the source of truth. */
+const mirrorLoop = (id, m) => backend.syncLoop(id, { goal: openGoals(m)[0]?.text ?? m.goal, dirs: (m.dirs ?? []).filter((d) => !d.machine).map((d) => d.path) })
+  .catch((e) => console.error(`omniloop: ${backend.name} didn't take loop ${id}'s goal and folders: ${String(e.stderr || e.message).trim().split("\n")[0]}`));
+
+/** Type a note into a terminal now (the guard "idle" refuses unless it is waiting); throws when it was not typed. */
+async function typed(address, text, guard = null) {
+  const r = await backend.send(address, text, { if: guard });
+  if (r.code !== 0) throw new Error(`${backend.name} send exit ${r.code}: ${r.output.trim().slice(0, 100)}`);
 }
 
 // ---- commands -------------------------------------------------------------------------------
@@ -192,14 +185,6 @@ async function cmdStart({ flags, rest }) {
   if (to) labels[LABEL.reportsTo] = to;
   if (flags.goal) labels[LABEL.goal] = flags.goal;
   if (flags.job) labels["omniloop.job"] = flags.job;
-  // Show it as a tab in the starter's space, when there is one.
-  if (me()) {
-    const space = (await hc(["get", me()]).catch(() => null))?.labels?.["herdr.space"];
-    if (space && !flags.space) labels["herdr.space"] = space;
-  }
-  if (flags.space) labels["herdr.space"] = flags.space;
-  const args = ["run", "--bg", "--no-parent", "--no-notify", ...(flags.cwd ? ["--cwd", flags.cwd] : [])];
-  for (const [k, v] of Object.entries(labels)) args.push("--label", `${k}=${v}`);
   const manifest = await manifestOf(loop);
   let argv;
   if (/(^|\/)claude$/.test(rest[0])) {
@@ -208,15 +193,11 @@ async function cmdStart({ flags, rest }) {
     argv = agentArgv({ shell: SHELL, claudeArgv: [...(await claudeLaunch()), ...flags], ...(await launchOf(manifest)), binDir: BIN,
       task: task ? `First run \`omniloop brief\`. ${task}` : null });
   } else argv = viaLogin(rest);
-  if (manifest) {
-    // Start in the loop folder (the agents' shared Claude project), in the loop's own space when it has one.
-    if (!flags.cwd) args.push("--cwd", loopHome(homedir(), loop));
-    const sp = !flags.space && (await loopSpace(loop));
-    if (sp) { const i = args.indexOf(`herdr.space=${labels["herdr.space"]}`); if (i >= 0) args[i] = `herdr.space=${sp.id}`; else args.push("--label", `herdr.space=${sp.id}`); }
-  }
-  if (flags["dry-run"]) return console.log(JSON.stringify({ hc: [...args, "--", ...argv] }, null, 1));
-  const r = await hc([...args, "--", ...argv]);
-  console.log(r.address);
+  // In a loop with a folder, start in it (the agents' shared Claude project), in the loop's own space when it has one.
+  const spec = { argv, cwd: flags.cwd ?? (manifest ? loopHome(homedir(), loop) : undefined), labels, loop, role: flags.coordinator ? "lead" : "helper",
+    space: flags.space, inLoopSpace: Boolean(manifest), starter: me() };
+  if (flags["dry-run"]) { const { cmd, args } = await backend.spawnPlan(spec); return console.log(JSON.stringify({ [cmd]: args }, null, 1)); }
+  console.log((await backend.spawn(spec)).address);
 }
 
 async function cmdJoin({ flags, rest }) {
@@ -228,20 +209,23 @@ async function cmdJoin({ flags, rest }) {
   if (flags.to) kv.push(`${LABEL.reportsTo}=${flags.to}`);
   if (flags.goal) kv.push(`${LABEL.goal}=${flags.goal}`);
   if (flags.job) kv.push(`omniloop.job=${flags.job}`);
-  await hc(["label", t, ...kv], { json: false });
+  await backend.label(t, kv);
+  // The labels are what omniloop reads; the backend's own loop (omni) follows when it lets this caller place the pane.
+  await backend.place(t, loop, flags.coordinator ? "lead" : "helper").catch((e) => console.error(`omniloop: ${t} is labelled, but ${backend.name} did not move it into ${loop}: ${String(e.stderr || e.message).trim().split("\n")[0]}`));
   console.log(`${t} in ${loop}`);
 }
 
 async function cmdLeave({ flags }) {
   const t = flags.terminal ?? me();
-  await hc(["label", t, ...[LABEL.loop, ...COORDINATOR_KEYS, LABEL.reportsTo, LABEL.goal, LABEL.notify, LABEL.needs, "omniloop.job"].map((k) => `${k}=`)], { json: false });
+  await backend.label(t, [LABEL.loop, ...COORDINATOR_KEYS, LABEL.reportsTo, LABEL.goal, LABEL.notify, LABEL.needs, "omniloop.job"].map((k) => `${k}=`));
+  await backend.place(t, null).catch(() => {});
   console.log(`${t} left its loop`);
 }
 
 async function cmdNeedsYou({ flags, rest }) {
   const t = flags.terminal ?? me();
   const off = rest[0] === "off";
-  await hc(["label", t, `${LABEL.needs}=${off ? "" : "you"}`], { json: false });
+  await backend.label(t, [`${LABEL.needs}=${off ? "" : "you"}`]);
   console.log(off ? "cleared" : "the user will be told when you stop");
 }
 
@@ -268,7 +252,7 @@ async function cmdHandoff({ flags, rest }) {
   const file = rest[0];
   const old = flags.terminal ?? me();
   if (!file || !old) die("usage: omniloop handoff <handoff-file> [--terminal T]");
-  const t = await hc(["get", old]);
+  const t = await backend.get(old);
   if (!t.labels?.[LABEL.loop]) die(`${old} is in no loop`);
   const argv = t.foreground?.argv ?? [];
   if (!/claude/.test(argv[0] ?? "")) die(`${old} runs ${argv[0] ?? "nothing"}; handoff only restarts Claude Code`);
@@ -283,15 +267,16 @@ async function cmdHandoff({ flags, rest }) {
   // In a loop with a folder, start fresh from it (the user's claude, the loop's context folders, its CLAUDE.md);
   // otherwise reuse the old command line and folder. The task goes right after the program (see agentArgv).
   const manifest = await manifestOf(t.labels[LABEL.loop]);
-  const args = ["run", "--bg", "--no-parent", "--no-notify", "--cwd", manifest ? loopHome(homedir(), manifest.id) : t.cwd];
-  for (const [k, v] of labels) args.push("--label", `${k}=${v}`);
   const base = manifest ? await claudeLaunch() : keep;
-  const r = await hc([...args, "--", ...agentArgv({ shell: SHELL, claudeArgv: base, ...(await launchOf(manifest)), binDir: BIN,
-    task: `First run \`omniloop brief\`. Then read ${file} and continue where it leaves off.` })]);
-  await hc(["label", old, `${LABEL.retired}=${r.address}`, ...COORDINATOR_KEYS.map((k) => `${k}=`)], { json: false });
+  const loopId = t.labels[LABEL.loop];
+  const r = await backend.spawn({ cwd: manifest ? loopHome(homedir(), manifest.id) : t.cwd, labels: Object.fromEntries(labels), loop: loopId,
+    role: isCoordinatorLabeled(t.labels) ? "lead" : "helper",
+    argv: agentArgv({ shell: SHELL, claudeArgv: base, ...(await launchOf(manifest)), binDir: BIN,
+      task: `First run \`omniloop brief\`. Then read ${file} and continue where it leaves off.` }) });
+  await backend.label(old, [`${LABEL.retired}=${r.address}`, ...COORDINATOR_KEYS.map((k) => `${k}=`)]);
   // Re-point the old one's reports.
   const kids = (await allTerminals()).filter((x) => x.labels?.[LABEL.reportsTo] === old);
-  for (const k of kids) await hc(["label", k.address, `${LABEL.reportsTo}=${r.address}`], { json: false });
+  for (const k of kids) await backend.label(k.address, [`${LABEL.reportsTo}=${r.address}`]);
   // And its open tasks.
   let moved = 0;
   if (manifest) await withTasks(loopHome(homedir(), manifest.id), (f) => {
@@ -373,6 +358,7 @@ async function cmdNew({ flags, rest }) {
     await writeJson(join(home, "loop.json"), manifest);
     await writeClaudeMd(home, manifest);
     await bootstrapHarnesses(home, manifest);
+    await mirrorLoop(id, manifest);
   }
   const np = manifest.projects?.length ?? 0;
   console.log(`${temp ? "temporary " : ""}loop ${id}: ${home} (${dirs.length} context folder${dirs.length === 1 ? "" : "s"}${np ? `; project${np === 1 ? "" : "s"} ${manifest.projects.join(", ")}` : ""})${dry ? " [dry run: nothing written]" : ""}`);
@@ -389,43 +375,18 @@ async function cmdNew({ flags, rest }) {
   await startCoordinator(id, manifest, task, { dry: flags["dry-run"] });
 }
 
-/** The tab or space `herdr-app do` just made, found by the ids it printed: its first terminal, or null. */
-async function madeTerminal(made) {
-  if (made?.terminal) return made.terminal;
-  try {
-    const { stdout } = await run("herdr-app", ["ls"], { maxBuffer: 16 << 20 });
-    for (const sp of JSON.parse(stdout).spaces ?? []) {
-      if (made?.tab) { const tb = (sp.tabs ?? []).find((t) => t.id === made.tab); if (tb) return tb.terminals?.[0]?.terminal ?? null; }
-      else if (made?.space && sp.id === made.space) return sp.tabs?.[0]?.terminals?.[0]?.terminal ?? null;
-    }
-  } catch {}
-  return null;
-}
-
 /**
- * Start a loop's coordinator on this computer and label it. In the loop's space when one is open here (a new tab named
- * "coordinator"), else in a new space named after the loop. The coordinator's terminal comes from what `herdr-app do` printed,
- * never from a name lookup (an old space with the loop's name may still be open).
+ * Start a loop's coordinator on this computer and label it (the backend decides where it lives: herdr, a tab in the
+ * loop's space or a new space named after the loop; omni, the loop's lead pane). See HerdrBackend.startCoordinator.
  */
 async function startCoordinator(id, manifest, task, { dry = false } = {}) {
   const home = loopHome(homedir(), id);
   const argv = agentArgv({ shell: SHELL, claudeArgv: await claudeLaunch(), ...(await launchOf(manifest)), task, binDir: BIN });
-  const sp = await loopSpace(id);
-  const [cmd, args] = sp ? ["tab.new", { space: sp.id, name: "coordinator", folder: home, argv }] : ["space.new", { name: id, folder: home, argv }];
-  if (dry) return console.log(JSON.stringify({ [cmd]: args }, null, 1));
-  const { stdout } = await run("herdr-app", ["do", cmd, JSON.stringify(args)]);
-  let made = null;
-  try { made = JSON.parse(stdout); } catch {}
-  let coordinator = null;
-  for (let i = 0; i < 40 && !coordinator; i++) {
-    coordinator = await madeTerminal(made);
-    if (!coordinator) await new Promise((r) => setTimeout(r, 250));
-  }
-  if (!coordinator) die(`${cmd} ran for ${id}, but its coordinator didn't appear; label it yourself: omniloop join ${id} --coordinator --terminal <t>`);
-  const kv = [`${LABEL.loop}=${id}`, ...COORDINATOR_KEYS.map((k) => `${k}=1`), "omniloop.job=coordinator"];
-  if (manifest.goal) kv.push(`${LABEL.goal}=${manifest.goal}`);
-  await hc(["label", coordinator, ...kv], { json: false });
-  console.log(`coordinator ${coordinator} in space ${id}`);
+  const labels = { [LABEL.loop]: id, ...Object.fromEntries(COORDINATOR_KEYS.map((k) => [k, "1"])), "omniloop.job": "coordinator", ...(manifest.goal ? { [LABEL.goal]: manifest.goal } : {}) };
+  const dirs = (manifest.dirs ?? []).filter((d) => !d.machine).map((d) => d.path);
+  const r = await backend.startCoordinator({ id, home, argv, labels, goal: manifest.goal, dirs }, { dry });
+  if (dry) return console.log(JSON.stringify(r.plan, null, 1));
+  console.log(`coordinator ${r.address} in space ${id}`);
 }
 
 /**
@@ -454,7 +415,7 @@ function resolvePath(p) {
 async function cmdAddDir({ flags, rest }) {
   const path = rest[0] && resolvePath(rest[0]);
   let id = typeof flags.loop === "string" ? flags.loop : null;
-  if (!id && me()) id = (await hc(["get", me()]).catch(() => null))?.labels?.[LABEL.loop] ?? null;
+  if (!id && me()) id = (await backend.get(me()).catch(() => null))?.labels?.[LABEL.loop] ?? null;
   if (!path || !id) die("usage: omniloop add-dir <path> [--loop id] [--on machine]");
   const home = loopHome(homedir(), id);
   const m = await manifestOf(id);
@@ -505,7 +466,7 @@ async function cmdShared({ flags }) {
 
 async function loopOfMe(flags) {
   if (typeof flags.loop === "string") return flags.loop;
-  return me() ? (await hc(["get", me()]).catch(() => null))?.labels?.[LABEL.loop] ?? null : null;
+  return me() ? (await backend.get(me()).catch(() => null))?.labels?.[LABEL.loop] ?? null : null;
 }
 
 async function cmdGoal({ flags, rest }) {
@@ -530,6 +491,7 @@ async function cmdGoal({ flags, rest }) {
   const next = r.manifest;
   await writeJson(join(home, "loop.json"), next);
   await writeClaudeMd(home, next, await readFile(join(home, "CLAUDE.md"), "utf8").catch(() => null));
+  await mirrorLoop(id, next);
   // The feed line comes before anything that needs herdr-core, so it lands even when hc is down.
   const gone = sub === "done" ? goalsOf(m).find((g) => String(g.n) === String(rest[0]))?.text : null;
   await postFeed(id, me() ?? YOU, sub === "set" ? `goal set: ${openGoals(next)[0]?.text ?? ""}` : sub === "add" ? `goal added: ${rest.join(" ")}` : sub === "edit" ? `goal ${rest[0]} reworded: ${rest.slice(1).join(" ")}` : `goal ${rest[0]} done${gone ? `: ${gone}` : ""}`);
@@ -537,17 +499,17 @@ async function cmdGoal({ flags, rest }) {
   // plugin hear about the change from its hook on their next prompt; others get the note typed in, if idle.
   let agents = [];
   try { agents = (await allTerminals()).filter((t) => !t.address.includes("/") && t.labels?.[LABEL.loop] === id && !t.labels?.[LABEL.retired]); }
-  catch { console.error("omniloop: saved, but herdr-core (hc) didn't answer, so no agent was told or relabelled"); }
+  catch { console.error(`omniloop: saved, but ${backend.words.down} didn't answer, so no agent was told or relabelled`); }
   const note = goalNote(next, id);
   const told = [], later = [];
   await Promise.all(agents.map(async (t) => {
-    if (next.goal !== m.goal) await hc(["label", t.address, `${LABEL.goal}=${next.goal}`], { json: false }).catch(() => {});
+    if (next.goal !== m.goal) await backend.label(t.address, [`${LABEL.goal}=${next.goal}`]).catch(() => {});
     if (t.address === me()) return;
     if ((t.foreground?.argv ?? []).includes(PLUGIN)) return told.push(`${t.address} (hook)`);
     const st = statusOf(t);
     if (st === "idle" || st === "done") {
       // Only agents that are waiting, as the watcher does: never typed into a plain shell or a working agent.
-      try { await hc(["send", ...(st === "idle" ? ["--if", "idle"] : []), t.address, note], { json: false }); told.push(t.address); } catch { later.push(t.address); }
+      try { await typed(t.address, note, st === "idle" ? "idle" : null); told.push(t.address); } catch { later.push(t.address); }
     } else if (st) later.push(t.address);
   }));
   console.log(note);
@@ -677,7 +639,7 @@ async function cmdReply({ flags, rest }) {
     coordinator = l?.coordinator ?? null;
     status = statusOf(l?.agents.find((m) => m.address === coordinator)?.terminal); // not m.status: that turns "no status" (a shell) into idle
   } catch {
-    const msg = "herdr-core (hc) didn't answer; this reply was not delivered";
+    const msg = `${backend.words.down} didn't answer; this reply was not delivered`;
     await postFeed(id, "omniloop", msg);
     die(msg);
   }
@@ -688,15 +650,11 @@ async function cmdReply({ flags, rest }) {
   }
   // Any reply from you counts as interacting with this loop, even when it is held: the watcher records a changed
   // omniloop.you label like a typed prompt. Never lets the reply fail.
-  await run("hc", ["label", coordinator, `${LABEL.you}=${Date.now()}`], { timeout: 5000 }).catch(() => {});
+  await backend.label(coordinator, [`${LABEL.you}=${Date.now()}`], { timeoutMs: 5000 }).catch(() => {});
   if (plan.send) {
-    try {
-      await run("hc", ["send", ...(plan.send.if ? ["--if", plan.send.if] : []), coordinator, text], { timeout: SEND_TIMEOUT_MS });
-      return console.log(`sent to ${coordinator}`);
-    } catch (e) {
-      if (!sendFailed(e.code, `${e.stdout ?? ""}${e.stderr ?? ""}`)) return console.log(`sent to ${coordinator}`);
-      // refused (it started working meanwhile) or timed out: hold it like any note
-    }
+    // Refused (it started working meanwhile) or timed out: hold it like any note.
+    const r = await backend.send(coordinator, text, { if: plan.send.if }).catch(() => ({ code: null, output: "" }));
+    if (!sendFailed(r.code, r.output)) return console.log(`sent to ${coordinator}`);
   }
   await putTimer({ at: Date.now(), to: coordinator, text, note: true });
   if (await watcherLive(id)) return console.log(`held for ${coordinator} (${status ?? "not an agent"}); the watcher delivers it when it stops`);
@@ -738,9 +696,9 @@ async function cmdTask({ flags, rest }) {
   if (sub !== "give") await postFeed(id, by, sub === "done" ? `task ${t.n} done: ${t.text}` : `task ${t.n} added for ${t.for}: ${t.text}`);
   // A task handed to another agent: tell it now if it's waiting (as the watcher does); otherwise it sees it in its list.
   if (sub !== "done" && t.for !== YOU && t.for !== me()) {
-    const a = await hc(["get", t.for]).catch(() => null);
+    const a = await backend.get(t.for).catch(() => null);
     const st = a && statusOf(a);
-    if (st === "idle" || st === "done") await hc(["send", ...(st === "idle" ? ["--if", "idle"] : []), t.for, taskNote(t, id)], { json: false }).then(() => console.log(`told ${t.for}`)).catch(() => {});
+    if (st === "idle" || st === "done") await typed(t.for, taskNote(t, id), st === "idle" ? "idle" : null).then(() => console.log(`told ${t.for}`)).catch(() => {});
   }
 }
 
@@ -787,7 +745,7 @@ async function cmdProject({ flags, rest }) {
   if (sub === "add" || sub === "rm") {
     const name = rest[0];
     let id = typeof flags.loop === "string" ? flags.loop : null;
-    if (!id && me()) id = (await hc(["get", me()]).catch(() => null))?.labels?.[LABEL.loop] ?? null;
+    if (!id && me()) id = (await backend.get(me()).catch(() => null))?.labels?.[LABEL.loop] ?? null;
     if (!name || !id) die(`usage: omniloop project ${sub} <project> [--loop id]`);
     if (sub === "add" && !projects.some((p) => p.name === name)) die(`no project named ${name} (omniloop project ls)`);
     const home = loopHome(homedir(), id);
@@ -823,11 +781,11 @@ const BRIEF = `omniloop: you are in a loop (a piece of work with one coordinator
   omniloop handoff <file>                 at ~60% context: write <file>, run this, then stop
   omniloop send <t> "<text>"              message a subagent or your coordinator (arrives labelled as you, not as the user)
   omniloop sessions                       Claude sessions you can send to (address, name, pid)
-  hc read <t>                             see a subagent's screen
+  ${backend.words.read.padEnd(40)}see a subagent's screen
 Cheap helpers (spend Gemini $, not Claude quota; Agent tool): sdd:gemini-judge ranks/filters/checks a batch, sdd:video-digest
 turns a video into a digest, sdd:spend-watch reports spend and limits (run it before a big fan-out).
 Rules: end your turn when you wait; the watcher types a one-line note into you when a subagent blocks,
-finishes or stalls ("omniloop: t3 blocked (question): ..."). Never poll, sleep or loop on hc wait.
+finishes or stalls ("omniloop: t3 blocked (question): ..."). Never poll, sleep or loop on ${backend.words.wait}.
 Only the coordinator (and needs-you) reaches the user; answer your subagents' questions yourself.
 Don't ask what you can decide: when one option is recommended or obvious, take it and say which. Ask the user
 only for what is theirs (credentials, spending, anything public, a real choice between goals).`;
@@ -923,10 +881,10 @@ async function cmdRename({ flags, rest }) {
   const fromHome = loopHome(homedir(), from), toHome = loopHome(homedir(), to);
   if (await lstat(toHome).catch(() => null)) die(`${toHome} already exists`);
   const agents = await agentsOf(from);
-  const sp = await loopSpace(from);
+  const sp = await backend.groupOf(from);
   const now = Date.now();
   let next = renamedManifest(m, { from, to, fromHome, toHome, now });
-  if (flags["dry-run"]) return console.log(JSON.stringify({ move: [fromHome, toHome], relabel: agents?.map((t) => t.address) ?? "hc down", space: sp?.id ?? null, dirs: next.dirs }, null, 1));
+  if (flags["dry-run"]) return console.log(JSON.stringify({ move: [fromHome, toHome], relabel: agents?.map((t) => t.address) ?? `${backend.name} down`, space: sp ?? null, dirs: next.dirs }, null, 1));
 
   await rename(fromHome, toHome);
   await symlink(toHome, fromHome);
@@ -951,9 +909,9 @@ async function cmdRename({ flags, rest }) {
   const ck = join(projects, claudeProjectKey(fromHome)), nk = join(projects, claudeProjectKey(toHome));
   if ((await lstat(ck).catch(() => null))?.isDirectory() && !(await exists(nk))) { await rename(ck, nk); await symlink(nk, ck); }
   await rename(join(HOME, `state-${from}.json`), join(HOME, `state-${to}.json`)).catch(() => {});
-  if (agents) for (const t of agents) await hc(["label", t.address, `${LABEL.loop}=${to}`], { json: false }).catch(() => lines.push(`  couldn't relabel ${t.address}: omniloop join ${to} --terminal ${t.address}`));
-  else lines.push("  herdr-core didn't answer: agents keep the old name; omniloop join <new> --terminal <t> for each");
-  if (sp) await run("herdr-app", ["do", "space.rename", JSON.stringify({ id: sp.id, name: to })]).catch(() => lines.push(`  space ${sp.id} keeps the old name`));
+  if (agents) for (const t of agents) await backend.label(t.address, [`${LABEL.loop}=${to}`]).catch(() => lines.push(`  couldn't relabel ${t.address}: omniloop join ${to} --terminal ${t.address}`));
+  else lines.push(`  ${backend.name === "herdr" ? "herdr-core" : backend.words.down} didn't answer: agents keep the old name; omniloop join <new> --terminal <t> for each`);
+  if (sp) await backend.renameGroup(sp, { from, to, terms: (agents ?? []).map((t) => t.address) }).catch((e) => lines.push(`  space ${sp} keeps the old name${backend.name === "omni" ? ` (${String(e.stderr || e.message).trim().split("\n")[0]}; the user can move panes with omni join)` : ""}`));
   await postFeed(to, me() ?? YOU, `loop renamed: ${from} → ${to}`);
   console.log(`renamed ${from} to ${to}: ${toHome}${agents?.length ? `; ${agents.length} agent(s) relabelled` : ""}${sp ? "; space renamed" : ""}. ${fromHome} links to it for agents already running.`);
   for (const l of lines) console.log(l);
@@ -980,13 +938,13 @@ async function cmdRm({ flags, rest }) {
   const chk = removeCheck(wts, { force });
   if (!chk.ok) die(`${id} not removed: ${chk.problems.join("; ")}. Land or drop that work first, or rerun with --force (uncommitted files are lost; an unmerged branch is kept).`);
   const agents = await agentsOf(id);
-  if (agents === null && !force) die("herdr-core (hc) didn't answer, so the loop's running agents can't be found; rerun with --force to delete anyway");
+  if (agents === null && !force) die(`${backend.words.down} didn't answer, so the loop's running agents can't be found; rerun with --force to delete anyway`);
   const live = (agents ?? []).filter((t) => t.state === "live");
   const inside = me() && live.some((t) => t.address === me());
   if (live.length && !inside && !force) die(`${id} has ${live.length} running agent(s) (${live.map((t) => t.address).join(", ")}): rerun with --force to stop them, or run it from inside the loop`);
-  const sp = await loopSpace(id);
+  const sp = await backend.groupOf(id);
   const aliases = await aliasesOf(home);
-  const job = { id, home, root, space: sp?.id ?? null, terms: (agents ?? []).map((t) => t.address), purge, aliases, formerly: await formerHomes(m, home) };
+  const job = { id, home, root, space: sp ?? null, terms: (agents ?? []).map((t) => t.address), purge, aliases, formerly: await formerHomes(m, home) };
   if (flags["dry-run"]) return console.log(JSON.stringify({ worktrees: wts.map((w) => w.worktree), ...job }, null, 1));
 
   const lines = [];
@@ -1036,15 +994,16 @@ async function cmdReap({ rest }) {
   job.formerly = (job.formerly ?? []).filter(under);
   job.terms = (job.terms ?? []).filter((t) => /^[\w-]+$/.test(t));
   await wait(800); // let rm's caller finish printing
-  for (const t of job.terms) await run("hc", ["kill", t]).catch(() => {});
-  if (job.space) await run("herdr-app", ["do", "space.close", JSON.stringify({ id: job.space, confirmed: true })]).catch(() => {});
+  for (const t of job.terms) await backend.kill(t);
+  if (job.space) await backend.closeGroup(job.space);
   for (let i = 0; i < 40; i++) {
-    const states = await Promise.all(job.terms.map((t) => hc(["get", t]).then((g) => g.state).catch(() => null)));
+    const states = await Promise.all(job.terms.map((t) => backend.get(t).then((g) => g.state).catch(() => null)));
     if (!states.includes("live")) break;
     await wait(500);
   }
   await wait(1000); // a stopping Claude session writes its transcript last
-  for (const t of job.terms) await run("hc", ["rm", t]).catch(() => {});
+  for (const t of job.terms) await backend.remove(t);
+  if (job.space) await backend.retireGroup(job.space);
   for (const a of job.aliases) if ((await lstat(a).catch(() => null))?.isSymbolicLink()) await rm(a, { force: true });
   if ((await realpath(job.home).catch(() => null)) === job.home) await rm(job.home, { recursive: true, force: true });
   if (job.purge) await purgeTraces(job);
@@ -1143,7 +1102,7 @@ async function cmdWatch({ flags }) {
       for (const { address, loop: l, to, job } of a.adopt) {
         const seenAt = candidates[address];
         const kv = [`${LABEL.loop}=${l}`, ...(to ? [`${LABEL.reportsTo}=${to}`] : []), ...(job ? [`omniloop.job=${job}`] : []), `${ADOPTED}=1`];
-        await hc(["label", address, ...kv], { json: false })
+        await backend.label(address, kv)
           .then(() => log("ADOPT", address, `joined ${l}${to ? `, reports to ${to}` : ""}`))
           .catch((e) => { newConsoles[address] = seenAt; log("ADOPT", address, `failed, will retry: ${String(e.message ?? e).slice(0, 100)}`); }); // back in, with its original time: retried until the 60 s give-up
       }
@@ -1165,19 +1124,12 @@ async function cmdWatch({ flags }) {
       sentAt[a.to] = Date.now();
       if (quiet) continue;
       // A Claude session with a messaging socket gets the note as a message from "omniloop" (not typed as you);
-      // anything else (no socket, a bypass session, another program) gets it typed by hc send, as before.
-      const hcSend = (to, text) => new Promise((resolve, reject) => {
-        const p = spawn("hc", ["send", ...(a.if ? ["--if", a.if] : []), to, text], { stdio: ["ignore", "pipe", "pipe"] });
-        let out = "";
-        p.stdout.on("data", (d) => { out += d; });
-        p.stderr.on("data", (d) => { out += d; });
-        const kill = setTimeout(() => p.kill(), SEND_TIMEOUT_MS);
-        p.on("exit", (code) => {
-          clearTimeout(kill);
-          if (!sendFailed(code, out)) { if (code !== 0) log("SENT", to, `(hc send exit ${code}, but it was typed: ${out.trim().slice(0, 100)})`); return resolve(); }
-          reject(new Error(`hc send exit ${code}`));
-        });
-      });
+      // anything else (no socket, a bypass session, another program) gets it typed by the backend (hc send, omni send), as before.
+      const hcSend = async (to, text) => {
+        const r = await backend.send(to, text, { if: a.if });
+        if (!sendFailed(r.code, r.output)) { if (r.code !== 0) log("SENT", to, `(${backend.name} send exit ${r.code}, but it was typed: ${r.output.trim().slice(0, 100)})`); return; }
+        throw new Error(`${backend.name} send exit ${r.code}`);
+      };
       deliver(a.to, { from: "omniloop", text: a.text.replace(/^omniloop: /, ""), replyTo: null, hcSend: (to) => hcSend(to, withoutReplies(a.text).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")) })
         .then((d) => { if (d.via === "socket") log("SOCKET", a.to, `(${d.to})`); })
         .catch((e) => {
@@ -1207,11 +1159,7 @@ async function cmdWatch({ flags }) {
   };
   const soon = () => { clearTimeout(timer); timer = setTimeout(tick, 300); };
 
-  const args = ["events", "--json", ...(loop ? ["--label", `${LABEL.loop}=${loop}`] : [])];
-  const ev = spawn("hc", args, { stdio: ["ignore", "pipe", "inherit"] });
-  ev.on("exit", (code) => { log(`hc events ended (${code})`); process.exit(1); });
-  const rl = createInterface({ input: ev.stdout });
-  rl.on("line", (raw) => {
+  const onLine = (raw) => {
     let msg; try { msg = JSON.parse(raw); } catch { return; }
     const now = Date.now();
     if (msg.terminals) {
@@ -1248,9 +1196,22 @@ async function cmdWatch({ flags }) {
       }
     }
     soon();
-  });
+  };
+  // The backend's event stream. The first line of every connection lists all terminals, so a reconnect (omni: the daemon
+  // drops a reader that falls behind) rebuilds the picture; herdr's stream ending ends the watcher, as before.
+  let ev = null, stopping = false;
+  const connect = () => {
+    ev = backend.events({ label: loop ? `${LABEL.loop}=${loop}` : null });
+    ev.on("exit", (code) => {
+      log(`${backend.name === "herdr" ? "hc" : backend.name} events ended (${code})`);
+      if (backend.eventsReconnect && !stopping) return void setTimeout(connect, 1000);
+      process.exit(1);
+    });
+    createInterface({ input: ev.stdout }).on("line", onLine);
+  };
+  connect();
   setInterval(tick, TICK_MS);
-  const stop = () => { ev.kill(); process.exit(0); };
+  const stop = () => { stopping = true; ev.kill(); process.exit(0); };
   process.on("SIGINT", stop); process.on("SIGTERM", stop);
 }
 
@@ -1281,7 +1242,7 @@ async function cmdIndex() {
 async function localIdentity() {
   const acct = (await readJson(join(homedir(), ".claude.json")))?.oauthAccount ?? {};
   let machines = [];
-  try { machines = (JSON.parse((await run("hc", ["machine", "ls", "--json"], { timeout: 10_000 })).stdout).machines ?? []).map((m) => m.name); } catch {}
+  try { machines = await backend.machines(); } catch {}
   let user = null; try { user = userInfo().username; } catch {}
   return identityTerms({ names: [acct.displayName, acct.fullName, acct.organizationName], emails: [acct.emailAddress], user, host: hostname(), home: homedir(), machines });
 }
@@ -1331,7 +1292,7 @@ async function cmdSessions() {
   const addrOf = new Map(Object.values(hooks).map((h) => [h.pid, h.address]));
   // Sessions without a hook record: herdr's terminals know their foreground pid.
   try {
-    const ts = (await hc(["ls"])).terminals.filter((t) => t.agent === "claude-code" && !t.address.includes("/"));
+    const ts = (await allTerminals()).filter((t) => t.agent === "claude-code" && !t.address.includes("/"));
     await Promise.all(ts.map(async (t) => { const p = await foregroundPid(t.address); if (p != null && !addrOf.has(p)) addrOf.set(p, t.address); }));
   } catch {}
   const rows = ss.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))

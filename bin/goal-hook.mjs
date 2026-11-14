@@ -2,10 +2,11 @@
 // Claude Code hook (SessionStart, UserPromptSubmit) for loop agents: when the loop's goal changed since this
 // session last saw it, print one line, which Claude Code adds to the agent's context. Otherwise print nothing,
 // so an unchanged goal costs no tokens. Never blocks: every failure exits 0 silently.
-//   Which loop: the terminal's omniloop label (HC_TERMINAL_ID), else a loop.json in the session's folder.
+//   Which loop: the terminal's omniloop label (HC_TERMINAL_ID or OMNI_PANE), else a loop.json in the session's folder.
 //   Seen: ~/.cache/omniloop/goal-seen/<session id> holds "<loop>:<goal rev>".
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { selectBackend } from "./lib/backend/index.mjs";
+import { selfId } from "../core/backend.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -16,9 +17,9 @@ try {
   const sid = String(input.session_id ?? "").replace(/[^A-Za-z0-9_-]/g, "");
   if (!sid) quiet();
   let loop = null;
-  if (process.env.HC_TERMINAL_ID) {
+  if (selfId(process.env)) {
     try {
-      const t = JSON.parse(execFileSync("hc", ["get", "--json", process.env.HC_TERMINAL_ID], { timeout: 2000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+      const t = await selectBackend().get(selfId(process.env), { timeoutMs: 2000 });
       loop = t?.labels?.omniloop || null;
     } catch {}
   }
