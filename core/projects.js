@@ -8,6 +8,8 @@
 // A loop lists its projects by name in loop.json ("projects"). Agents started in it get each project's folder as a plugin
 // (its skills and tools) and its repos as --add-dir folders; CLAUDE.md gets each project's CONTEXT.md.
 
+import { replaceBlock, endOfBlock } from "./blocks.js";
+
 /** Projects whose triggers appear in `text`, best first: [{ name, score, hits }]. URL hits count double. */
 export function matchProjects(projects, text) {
   const t = String(text ?? "").toLowerCase();
@@ -71,12 +73,12 @@ export function projectsBlock(contexts) {
 }
 
 /** Replace (or add, after the context block or at the end) the projects block in a CLAUDE.md. */
-export function withProjectsBlock(text, contexts) {
-  const block = projectsBlock(contexts);
-  const a = text.indexOf(PROJECTS_START), b = text.indexOf(PROJECTS_END);
-  if (a >= 0 && b > a) return text.slice(0, a) + block + text.slice(b + PROJECTS_END.length);
-  const end = "<!-- /omniloop:context -->";
-  const c = text.indexOf(end);
-  if (c >= 0) return text.slice(0, c + end.length) + `\n\n${block}` + text.slice(c + end.length);
-  return `${text.trimEnd()}\n\n${block}\n`;
+export function withProjectsBlock(text, contexts, notes = []) {
+  const anchor = (t, block) => {
+    const c = endOfBlock(t, "<!-- /omniloop:context -->");
+    return c >= 0 ? t.slice(0, c) + `\n\n${block}` + t.slice(c) : `${t.trimEnd()}\n\n${block}\n`;
+  };
+  const r = replaceBlock(text, PROJECTS_START, PROJECTS_END, projectsBlock(contexts), anchor);
+  if (r.note) notes.push(r.note);
+  return r.text;
 }

@@ -97,8 +97,21 @@ async function launchOf(manifest) {
   return { dirs: all, pluginDirs: [PLUGIN, ...pluginDirs], noMemory: manifest.temp ? { env: NO_MEMORY_ENV, tools: NO_MEMORY_TOOLS } : null };
 }
 
-/** CLAUDE.md for a loop, with its projects' CONTEXT.md in the projects block. */
-async function writeClaudeMd(home, manifest, existing = null) {
+/** The loop's CLAUDE.md text, or null when there is none. Only ENOENT means absent; any other error is thrown. */
+async function readClaudeMd(home) {
+  try { return await readFile(join(home, "CLAUDE.md"), "utf8"); } catch (e) { if (e.code === "ENOENT") return null; throw e; }
+}
+
+/**
+ * CLAUDE.md for a loop, with its projects' CONTEXT.md in the projects block. `existing`: its text (null = none yet;
+ * omitted = read it here). A file that can't be read is left alone with a note, never regenerated; so is a block whose
+ * markers are damaged.
+ */
+async function writeClaudeMd(home, manifest, existing = undefined) {
+  if (existing === undefined) {
+    try { existing = await readClaudeMd(home); }
+    catch (e) { return console.error(`omniloop: CLAUDE.md can't be read (${e.code ?? e.message}): left alone`); }
+  }
   const projects = await loadProjects();
   const contexts = [];
   for (const name of manifest.projects ?? []) {
@@ -106,8 +119,11 @@ async function writeClaudeMd(home, manifest, existing = null) {
     const text = p && (await readFile(join(p.dir, "CONTEXT.md"), "utf8").catch(() => null));
     if (text) contexts.push({ name, text });
   }
-  const base = existing ? updateClaudeMd(existing, manifest) : claudeMd(manifest);
-  await writeFile(join(home, "CLAUDE.md"), withGoalBlock(withProjectsBlock(base, contexts), manifest));
+  const notes = [];
+  const base = existing === null ? claudeMd(manifest) : updateClaudeMd(existing, manifest, notes);
+  const text = withGoalBlock(withProjectsBlock(base, contexts, notes), manifest, notes);
+  for (const n of notes) console.error(`omniloop: ${n}`);
+  if (text !== existing) await writeFile(join(home, "CLAUDE.md"), text);
 }
 
 /** Harness config (core/harness.js) for a loop folder; a problem is one line, never a failure. */
@@ -426,7 +442,7 @@ async function cmdAddDir({ flags, rest }) {
   let lines = [];
   if (!on) ({ manifest: next, lines } = await isolateDirs(id, next, { only: path }));
   await writeJson(join(home, "loop.json"), next);
-  await writeClaudeMd(home, next, await readFile(join(home, "CLAUDE.md"), "utf8").catch(() => null));
+  await writeClaudeMd(home, next);
   await bootstrapHarnesses(home, next);
   console.log(`added ${path}${on ? ` (on ${on})` : ""} to ${id}: agents started from now get it. Running ones see it in CLAUDE.md; reading it may ask for approval until they hand off.`);
   for (const l of lines) console.log(l);
@@ -490,7 +506,7 @@ async function cmdGoal({ flags, rest }) {
   if (r.manifest === m) return console.log(`${id}: no change`);
   const next = r.manifest;
   await writeJson(join(home, "loop.json"), next);
-  await writeClaudeMd(home, next, await readFile(join(home, "CLAUDE.md"), "utf8").catch(() => null));
+  await writeClaudeMd(home, next);
   await mirrorLoop(id, next);
   // The feed line comes before anything that needs herdr-core, so it lands even when hc is down.
   const gone = sub === "done" ? goalsOf(m).find((g) => String(g.n) === String(rest[0]))?.text : null;
@@ -754,7 +770,7 @@ async function cmdProject({ flags, rest }) {
     const next = sub === "add" ? addProject(m, name) : removeProject(m, name);
     if (next === m) return console.log(sub === "add" ? `${id} already has the ${name} project` : `${id} has no ${name} project`);
     await writeJson(join(home, "loop.json"), next);
-    await writeClaudeMd(home, next, await readFile(join(home, "CLAUDE.md"), "utf8").catch(() => null));
+    await writeClaudeMd(home, next);
     return console.log(sub === "add" ? `added the ${name} project to ${id}: agents started from now get its skills and tools; running ones see its notes in CLAUDE.md.`
       : `removed the ${name} project from ${id}: agents started from now don't get it; running ones keep what they loaded.`);
   }
@@ -835,7 +851,7 @@ async function cmdRmDir({ flags, rest }) {
     for (const l of await dropWorktree(r, Boolean(flags.force))) console.log(l);
   }
   await writeJson(join(home, "loop.json"), next);
-  await writeClaudeMd(home, next, await readFile(join(home, "CLAUDE.md"), "utf8").catch(() => null));
+  await writeClaudeMd(home, next);
   await bootstrapHarnesses(home, next);
   await postFeed(id, me() ?? YOU, `context folder removed: ${path}`);
   console.log(`removed ${path} from ${id}: agents started from now don't get it.`);
@@ -900,9 +916,12 @@ async function cmdRename({ flags, rest }) {
     catch (e) { lines.push(`  ${d.path}: branch stays ${old.branch} (${String(e.stderr || e.message).trim().split("\n")[0]})`); return { ...d, branch: old.branch }; }
   })) };
   await writeJson(join(toHome, "loop.json"), next);
-  let md = await readFile(join(toHome, "CLAUDE.md"), "utf8").catch(() => null);
-  if (md) { md = renameText(md, from, to); if (!next.temp) md = withFormerlyNote(md, from, new Date(now).toISOString().slice(0, 10)); }
-  await writeClaudeMd(toHome, next, md);
+  let md;
+  try { md = await readClaudeMd(toHome); } catch (e) { console.error(`omniloop: CLAUDE.md can't be read (${e.code ?? e.message}): left alone`); }
+  if (md !== undefined) {
+    if (md) { md = renameText(md, from, to); if (!next.temp) md = withFormerlyNote(md, from, new Date(now).toISOString().slice(0, 10)); }
+    await writeClaudeMd(toHome, next, md);
+  }
   await bootstrapHarnesses(toHome, next);
   // Claude Code saves sessions by folder: move them along, and link the old one for sessions still running.
   const projects = join(homedir(), ".claude", "projects");

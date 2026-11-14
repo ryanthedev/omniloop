@@ -7,6 +7,8 @@
 // CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1 so those folders' own CLAUDE.md files load too.
 // Their sessions are saved under one Claude project (the loop folder), so a loop's history stays together.
 
+import { replaceBlock } from "./blocks.js";
+
 export const LOOPS_DIR = "loops";
 export const ADD_DIR_ENV = "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD";
 
@@ -208,10 +210,10 @@ The ones you'll use most; \`omniloop brief\` has the rest.
 }
 
 /** Rewrite only the context block of an existing CLAUDE.md, keeping everything else. */
-export function updateClaudeMd(text, manifest) {
-  const a = text.indexOf(CONTEXT_START), b = text.indexOf(CONTEXT_END);
-  if (a < 0 || b < a) return `${text.trimEnd()}\n\n${contextBlock(manifest)}\n`;
-  return text.slice(0, a) + contextBlock(manifest) + text.slice(b + CONTEXT_END.length);
+export function updateClaudeMd(text, manifest, notes = []) {
+  const r = replaceBlock(text, CONTEXT_START, CONTEXT_END, contextBlock(manifest), (t, block) => `${t.trimEnd()}\n\n${block}\n`);
+  if (r.note) notes.push(r.note);
+  return r.text;
 }
 
 /**

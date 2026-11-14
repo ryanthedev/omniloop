@@ -7,6 +7,8 @@
 // "set" replaces the current goal (the old one is kept as history), "add" adds another open goal alongside it,
 // "done n" closes one. The last open goal can't be closed: set a new one instead.
 
+import { replaceBlock } from "./blocks.js";
+
 export function goalsOf(m) {
   if (Array.isArray(m.goals) && m.goals.length) return m.goals;
   return m.goal ? [{ n: 1, text: m.goal, at: m.created_ms ?? 0 }] : [];
@@ -80,14 +82,16 @@ export function goalBlock(m) {
 }
 
 /** Rewrite the goal block of a CLAUDE.md; an old file's lone "**Goal:**" line becomes the block. */
-export function withGoalBlock(text, m) {
-  const a = text.indexOf(GOAL_START), b = text.indexOf(GOAL_END);
-  if (a >= 0 && b > a) return text.slice(0, a) + goalBlock(m) + text.slice(b + GOAL_END.length);
-  const line = text.match(/^\*\*(?:End goal|Goal):\*\*.*$/m);
-  if (line) return text.replace(line[0], goalBlock(m));
-  const h = text.match(/^# .*$/m);
-  if (h) return text.replace(h[0], `${h[0]}\n\n${goalBlock(m)}`);
-  return `${goalBlock(m)}\n\n${text}`;
+export function withGoalBlock(text, m, notes = []) {
+  const anchor = (t, block) => {
+    const line = t.match(/^\*\*(?:End goal|Goal):\*\*.*$/m);
+    if (line) return t.replace(line[0], () => block);
+    const h = t.match(/^# .*$/m);
+    return h ? t.replace(h[0], () => `${h[0]}\n\n${block}`) : `${block}\n\n${t}`;
+  };
+  const r = replaceBlock(text, GOAL_START, GOAL_END, goalBlock(m), anchor);
+  if (r.note) notes.push(r.note);
+  return r.text;
 }
 
 /** The one line an agent gets when the goal changed. */
