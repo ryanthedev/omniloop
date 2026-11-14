@@ -1,11 +1,12 @@
 // One real smoke test: omniloop's omni backend against a throwaway omni-daemon (own runtime dir, own HOME, no restore).
-// Skipped unless the omni binaries exist: OMNI_BIN_DIR (default the D6 build, /Users/r/repos/omni/build/target/d6/debug) must hold
-// `omni` and `omni-daemon` built from omni job 5d (the loop surface). Scratch lives under OMNI_SMOKE_TMP (default omni's build/tmp/d6).
+// Skipped unless the omni binaries exist: OMNI_BIN_DIR (default ~/repos/omni/build/target/d6/debug) must hold
+// `omni` and `omni-daemon` built from omni job 5d (the loop surface). Scratch lives under OMNI_SMOKE_TMP (default ~/repos/omni/build/tmp/d6).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OmniBackend } from "../bin/lib/backend/omni.mjs";
@@ -13,8 +14,8 @@ import { nodeProc } from "../bin/lib/proc.mjs";
 
 const run = promisify(execFile);
 const BIN = join(dirname(fileURLToPath(import.meta.url)), "..", "bin", "omniloop.mjs");
-const OMNI_DIR = process.env.OMNI_BIN_DIR ?? "/Users/r/repos/omni/build/target/d6/debug";
-const TMP = process.env.OMNI_SMOKE_TMP ?? "/Users/r/repos/omni/build/tmp/d6";
+const OMNI_DIR = process.env.OMNI_BIN_DIR ?? join(homedir(), "repos/omni/build/target/d6/debug");
+const TMP = process.env.OMNI_SMOKE_TMP ?? join(homedir(), "repos/omni/build/tmp/d6");
 const have = existsSync(join(OMNI_DIR, "omni")) && existsSync(join(OMNI_DIR, "omni-daemon"));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(what, fn, ms = 15_000) {

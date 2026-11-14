@@ -7,7 +7,7 @@ test("ids", () => {
   assert.ok(!validId("Plenary"));
   assert.ok(!validId("../x"));
   assert.ok(!validId(""));
-  assert.equal(loopHome("/Users/r", "m2"), "/Users/r/loops/m2");
+  assert.equal(loopHome("/home/jane", "m2"), "/home/jane/loops/m2");
 });
 
 test("context folders: added once, per machine", () => {

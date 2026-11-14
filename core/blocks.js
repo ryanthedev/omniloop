@@ -21,7 +21,8 @@ function defuse(body, start, end) {
  * Put `body` (the block, markers included) between `start` and `end` in `text`.
  * - one clean pair: what is between them is replaced, every other byte stays;
  * - no markers at all: `anchor(text, body)` returns the text with the block inserted;
- * - anything else (one marker alone on its line, duplicates, wrong order): the text comes back unchanged. * Text that merely quotes a marker mid-line is not a marker.
+ * - anything else (one marker alone on its line, duplicates, wrong order): the text comes back unchanged.
+ * Text that merely quotes a marker mid-line is not a marker.
  * Returns { text, note }; note is null unless the markers are damaged.
  */
 export function replaceBlock(text, start, end, body, anchor) {

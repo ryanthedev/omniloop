@@ -35,11 +35,11 @@ fake omni; asserts no hc/herdr-app call is made), `omni-smoke.test.mjs` (1, real
 Caveat: the existing lifecycle/feed tests inherit the environment; run inside an omni pane (OMNI_PANE set, HC_TERMINAL_ID empty) they would auto-select omni. Run them with `env -u OMNI_PANE` (or set OMNILOOP_BACKEND=herdr).
 
 ## Smoke test (real daemon): PASSED
-Built `omni` + `omni-daemon` from /Users/r/repos/omni/build/wt/5d (head 21235ff-ish; the tree was moving) with
-`CARGO_TARGET_DIR=/Users/r/repos/omni/build/target/d6 CARGO_BUILD_JOBS=4 OMNI_VT_PREFIX=/Users/r/repos/omni/tools/ghostty-vt gates/lock.sh run d6-build -- cargo build -p omni-cli -p omni-daemon`
+Built `omni` + `omni-daemon` from ~/repos/omni/build/wt/5d (head 21235ff-ish; the tree was moving) with
+`CARGO_TARGET_DIR=~/repos/omni/build/target/d6 CARGO_BUILD_JOBS=4 OMNI_VT_PREFIX=~/repos/omni/tools/ghostty-vt gates/lock.sh run d6-build -- cargo build -p omni-cli -p omni-daemon`
 (waited ~15 min for the heavy lock; build 13.7 s, no ghostty rebuild; omni-hostd not needed, the daemon binary is omni-daemon).
 `node --test test/omni-smoke.test.mjs`: pass 1 / fail 0 (1.3 s). It starts a throwaway `omni-daemon` (own OMNI_RUNTIME_DIR/DATA_DIR/HOME under
-/Users/r/repos/omni/build/tmp/d6/s-*, removed after) and drives omniloop as the user: `new` (omni loop with goal), `start --coordinator` and `start` (lead
+~/repos/omni/build/tmp/d6/s-*, removed after) and drives omniloop as the user: `new` (omni loop with goal), `start --coordinator` and `start` (lead
 and helper panes, roles checked via `omni loop get`), `ls`, label via `needs-you`, `send "--smoke words"` and read it back from the screen, `--if idle`
 refused on a plain program (exit non-zero, nothing typed), `watch --loop smk --dry-run` on `omni events --all` ("watching loop smk: 2 terminals"),
 then kill/rm/`loop rm`. The test skips with a message when `OMNI_BIN_DIR` (default the d6 build dir) has no binaries.

@@ -7,8 +7,8 @@ import { addProject, removeProject } from "../core/projects.js";
 import { removeDir, agentArgv, claudeMd, validId } from "../core/loopdir.js";
 
 test("claude project keys and which entries belong to a loop", () => {
-  const key = claudeProjectKey("/Users/r/loops/my-loop");
-  assert.equal(key, "-Users-r-loops-my-loop");
+  const key = claudeProjectKey("/home/jane/loops/my-loop");
+  assert.equal(key, "-home-jane-loops-my-loop");
   assert.equal(claudeProjectKey("/a/b.c_d"), "-a-b-c-d");
   assert.ok(isLoopClaudeEntry(key, key));
   assert.ok(isLoopClaudeEntry(`-private-tmp-claude-501-${key}-26fa1055-269f-4ed4-882a-912677cf56d3-scratchpad`, key));
