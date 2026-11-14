@@ -90,6 +90,31 @@ function line(a, t, rec) {
   return `${a.address}${role} ${what}${tail}`;
 }
 
+/** Label the watcher puts on a console it adopted (made with + in a loop's space): its first prompt is a person's, not a task. */
+export const ADOPTED = "omniloop.adopted";
+
+// A sender omniloop knows to be a terminal or session address (omniloop send and the MCP tool use the address
+// in herdr). Anything else (a session name, "agent") can't be matched to the parent, so it never suppresses a note.
+const ADDRESS = /^(t[0-9a-z]+|s-[A-Za-z0-9_-]{1,8})$/;
+
+/**
+ * Is a finished turn news for its parent? Only work it was given. When in doubt it is: a note is suppressed only
+ * when the turn record positively says the turn came from a person typing in it (not a started helper's first
+ * prompt, its task) and/or from other sessions known by address. A turn a person typed is already on their
+ * screen, and another session's errand goes back to that session; waking an idle parent for them costs a whole
+ * turn, often on a cold prompt cache, so they go to the loop feed only.
+ * rec: the agent's turn record (rec.given from the Stop hook, core/turns.js givenBy); to: the parent; t: the agent's terminal.
+ */
+export function worthTelling(rec, to, t) {
+  const g = rec?.given;
+  if (!g) return true;                                              // unknown who gave it: as before
+  if (g.from.some((f) => f === "omniloop" || f === String(to) || !ADDRESS.test(f))) return true;
+  // A person's prompt counts only as a started helper's task (its first turn, or can't tell). An adopted console
+  // has no task: its prompts are all a person's.
+  if (g.you && rec.first !== false && !t?.labels?.[ADOPTED]) return true;
+  return false;
+}
+
 /** How long a finished turn waits for its Stop hook's record before it is told without the reply. */
 export const REPLY_WAIT_MS = 10_000;
 
@@ -150,6 +175,8 @@ export function step(prev, terminals, now, { loop = null, turns = {} } = {}) {
     if (!remote(a.address) && !remote(a.to)) post(a.loop, l);
     // The agent already told its parent this turn (omniloop send / hc send): a "finished" note would say it twice.
     if (a.kind === "done" && a.to !== "you" && alreadyReported(rec, a.to)) continue;
+    // Not work its parent gave it (a person chatting in it, another session's errand): the feed has it.
+    if (a.kind === "done" && a.to !== "you" && !worthTelling(rec, a.to, byAddr.get(a.address))) continue;
     if (a.to === "you") actions.push({ type: "you", alert: a, text });
     else if (remote(a.to)) continue;
     else (state.pending[a.to] ??= []).push(l);

@@ -5,7 +5,8 @@ import { mkdtempSync, readFileSync, existsSync, readdirSync, rmSync } from "node
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { safeAddress, addressOf, pidOf, sessionRecord, turnStart, turnEnd, turnReport, TEXT_MAX } from "../core/turns.js";
+import { safeAddress, addressOf, pidOf, sessionRecord, turnStart, turnEnd, turnReport, givenBy, TEXT_MAX } from "../core/turns.js";
+import { writeFileSync } from "node:fs";
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), "..", "bin", "session-hook.mjs");
 
@@ -91,4 +92,52 @@ test("review fixes: no reply carried over, mode not inherited across sessions, n
   assert.equal(foreign({ sessionId: "a", pid: 1 }, ctx({ session_id: "b" }), () => true), true);
   assert.equal(foreign({ sessionId: "a", pid: 1 }, ctx({ session_id: "b" }), () => false), false);
   assert.equal(foreign({ sessionId: "a", pid: 1 }, ctx({ session_id: "a" }), () => true), false);
+});
+
+// Transcript entries shaped like Claude Code's (seen 2026-11-13): a peer message and a typed prompt.
+const peer = (name) => ({ type: "user", isMeta: true, promptSource: "system", origin: { kind: "peer", from: "unknown", name }, message: { role: "user", content: "Another Claude session sent a message: <cross-session-message>…" } });
+const typed = (text) => ({ type: "user", promptSource: "typed", origin: { kind: "human" }, message: { role: "user", content: text } });
+const toolResult = { type: "user", origin: { kind: "human" }, message: { role: "user", content: [{ type: "tool_result", content: "ok" }] } };
+
+const at = (e, ms) => ({ ...e, timestamp: new Date(ms).toISOString() });
+
+test("givenBy: every prompt since the previous turn ended", () => {
+  assert.deepEqual(givenBy([typed("hi"), peer("t1mb")]), { you: true, from: ["t1mb"] });
+  assert.deepEqual(givenBy([at(peer("t1mb"), 1000), at(typed("can you check?"), 3000)], 2000), { you: true, from: [] });
+  // The lead's task, then a person's line mid-turn: both count (the lead's is not hidden).
+  assert.deepEqual(givenBy([at(peer("t1mb"), 3000), at(typed("also this"), 4000)], 2000), { you: true, from: ["t1mb"] });
+  assert.deepEqual(givenBy([typed('<hc from="t11">read the brief</hc>')]), { you: false, from: ["t11"] });
+  assert.deepEqual(givenBy([typed("omniloop: t1mc finished its turn")]), { you: false, from: ["omniloop"] });
+  assert.deepEqual(givenBy([{ type: "user", origin: { kind: "human" }, message: { content: [{ type: "text", text: '<hc from="t2">x</hc>' }] } }]), { you: false, from: ["t2"] });
+  assert.deepEqual(givenBy([typed("go"), toolResult, { type: "assistant" }]), { you: true, from: [] });
+  assert.equal(givenBy([{ type: "assistant" }, toolResult]), null);
+  assert.equal(givenBy([at(typed("old"), 1000)], 2000), null);   // nothing in this turn: unknown
+  assert.equal(givenBy([]), null);
+});
+
+test("turnEnd: first is the session's first turn; an older record can't say", () => {
+  const c = (sid) => ({ ...ctx({ session_id: sid, last_assistant_message: "x" }), entries: [] });
+  assert.equal(turnEnd(null, c("s1")).first, true);
+  assert.equal(turnEnd({ startedAt: 1 }, c("s1")).first, true);
+  const one = turnEnd(null, c("s1"));
+  assert.equal(turnEnd(one, c("s1")).first, false);
+  assert.equal(turnEnd(one, c("s2")).first, true);                 // a new session at the address
+  assert.equal(turnEnd({ endedAt: 50, sessionId: "s1" }, c("s1")).first, null);   // written before this existed
+});
+
+test("the Stop hook records who gave the turn from the transcript", () => {
+  const home = mkdtempSync(join(tmpdir(), "omniloop-hook-"));
+  try {
+    const tr = join(home, "t.jsonl");
+    writeFileSync(tr, [typed("task"), { type: "assistant" }, peer("t1mb")].map((e) => JSON.stringify(e)).join("\n") + "\n");
+    const run = (input) => spawnSync("node", [HOOK], { input: JSON.stringify(input), env: { ...process.env, OMNILOOP_HOME: home, HC_TERMINAL_ID: "t9", CLAUDE_PID: "4242" }, encoding: "utf8" });
+    const base = { session_id: "abcdef0123456789", cwd: "/w", transcript_path: tr };
+    run({ ...base, hook_event_name: "UserPromptSubmit", prompt: "x" });
+    run({ ...base, hook_event_name: "Stop", last_assistant_message: "done" });
+    const t = JSON.parse(readFileSync(join(home, "turns", "t9.json"), "utf8"));
+    assert.deepEqual(t.given, { you: true, from: ["t1mb"] }); assert.equal(t.first, true);
+    run({ ...base, transcript_path: join(home, "missing.jsonl"), hook_event_name: "Stop", last_assistant_message: "d" });
+    const t2 = JSON.parse(readFileSync(join(home, "turns", "t9.json"), "utf8"));
+    assert.equal(t2.given, null); assert.equal(t2.first, false);
+  } finally { rmSync(home, { recursive: true, force: true }); }
 });

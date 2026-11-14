@@ -487,3 +487,29 @@ test("adopt: a loop with no lead (you lead it) adopts with no parent; retired me
   const retired = [T("t2", "done", SP("spA", L({ "omniloop.retired": "t3" }))), T("t5", null, SP("spA"))];
   assert.deepEqual(adoptions({ t5: 0 }, retired, ADOPT_AFTER_MS).adopt, []);
 });
+
+test("a finished turn reaches the parent only when it was work given to it, and when unsure", async () => {
+  const { worthTelling, ADOPTED } = await import("../core/watch.js");
+  const idle2 = put(put(base(), "t2", { status: { state: "idle" } }), "t3", { status: { state: "done" } });
+  const s0 = () => initState(put(base(), "t2", { status: { state: "idle" } }), 0);
+  const rec = (given, first = false) => ({ startedAt: 10, endedAt: 20, text: "reply", given, first });
+  const sent = (r, ts = idle2) => step(s0(), ts, 1, { turns: { t3: r } }).actions.filter((a) => a.type === "send").length;
+  const adopted = put(idle2, "t3", { labels: { ...idle2[2].labels, [ADOPTED]: "1" } });
+  assert.equal(sent(rec({ you: false, from: ["t2"] })), 1);                 // its parent asked (message or hc send)
+  assert.equal(sent(rec({ you: true, from: ["t2"] })), 1);                  // its parent asked, then a person added a line
+  assert.equal(sent(rec({ you: false, from: ["omniloop"] })), 1);           // a watcher note or timer woke it
+  assert.equal(sent(rec({ you: true, from: [] }, true)), 1);                // a started helper's task
+  assert.equal(sent(rec({ you: true, from: [] }, null)), 1);                // can't tell it isn't the task: relay
+  assert.equal(sent(rec({ you: false, from: ["devicepool-65"] })), 1);      // a sender known by name, not address: relay
+  assert.equal(sent(rec(null)), 1);                                          // no record of who gave it: as before
+  assert.equal(sent({ startedAt: 10, endedAt: 20, text: "reply" }), 1);      // an older hook's record
+  assert.equal(sent(rec({ you: true, from: [] }, false)), 0);               // a person typing in it
+  assert.equal(sent(rec({ you: false, from: ["t7"] })), 0);                 // another session's errand
+  assert.equal(sent(rec({ you: true, from: [] }, true), adopted), 0);       // + console: a person's first prompt
+  assert.equal(sent(rec({ you: true, from: [] }, null), adopted), 0);
+  assert.equal(sent(rec({ you: true, from: ["t2"] }, null), adopted), 1);   // the lead gave an adopted console work
+  // Skipped notes still reach the loop's feed.
+  const r = step(s0(), idle2, 1, { turns: { t3: rec({ you: true, from: [] }) } });
+  assert.ok(r.feed.some((f) => /t3 finished its turn/.test(JSON.stringify(f.entry))));
+  assert.equal(worthTelling(null, "t2", null), true);
+});

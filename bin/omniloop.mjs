@@ -11,7 +11,7 @@ import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LABEL, buildLoops, statusOf } from "../core/omniloop.js";
-import { initState, step, parseDuration, touchedByYou, sendFailed, hold, withoutReplies, adoptions, ADOPT_AFTER_MS } from "../core/watch.js";
+import { initState, step, parseDuration, touchedByYou, sendFailed, hold, withoutReplies, adoptions, ADOPT_AFTER_MS, ADOPTED } from "../core/watch.js";
 import { validId, loopHome, newManifest, addDir, removeDir, dirsOn, launchDirsOn, worktreeChoice, worktreeTarget, worktreeBranch, setWorktree, overlaps, claudeMd, updateClaudeMd, memberArgv, parseAliasWords, sharedWith, LOOPS_DIR } from "../core/loopdir.js";
 import { matchProjects, addProject, removeProject, projectLaunch, withProjectsBlock } from "../core/projects.js";
 import { goalsOf, openGoals, setGoal, addGoal, finishGoal, editGoal, withGoalBlock, goalNote } from "../core/goals.js";
@@ -1100,7 +1100,7 @@ async function cmdWatch({ flags }) {
       const a = adoptions(newConsoles, [...terms.values()], Date.now());
       newConsoles = a.keep;
       for (const { address, loop: l, to, job } of a.adopt) {
-        const kv = [`${LABEL.loop}=${l}`, ...(to ? [`${LABEL.reportsTo}=${to}`] : []), ...(job ? [`omniloop.job=${job}`] : [])];
+        const kv = [`${LABEL.loop}=${l}`, ...(to ? [`${LABEL.reportsTo}=${to}`] : []), ...(job ? [`omniloop.job=${job}`] : []), `${ADOPTED}=1`];
         await hc(["label", address, ...kv], { json: false })
           .then(() => log("ADOPT", address, `joined ${l}${to ? `, reports to ${to}` : ""}`))
           .catch((e) => log("ADOPT", address, `failed: ${String(e.message ?? e).slice(0, 100)}`));

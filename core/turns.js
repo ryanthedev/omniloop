@@ -1,7 +1,7 @@
 // turns.js: the record-merging half of bin/session-hook.mjs. Pure (no I/O).
 // Writes two kinds of record under ~/.cache/omniloop (formats: core/deliver.js "Turn records"):
 //   sessions/<address>.json  { address, pid, sessionId, mode, cwd, at }   who a session is, for delivery
-//   turns/<address>.json     { address, sessionId, pid, mode, startedAt, endedAt, text, reportedAt, reportedTo }
+//   turns/<address>.json     { address, sessionId, pid, mode, startedAt, endedAt, text, first, given, reportedAt, reportedTo }
 import { sentTo } from "./deliver.js";
 
 /** Longest last-reply text kept in a turn record. */
@@ -38,11 +38,46 @@ export function turnStart(prev, { address, pid, input, now }) {
   return { ...rest, address, pid, sessionId: input.session_id ?? rest.sessionId ?? null, mode: input.permission_mode ?? rest.mode ?? null, startedAt: now };
 }
 
+/**
+ * Who gave this turn: every prompt in the transcript after `since` (the previous turn's end, ms; null: all in
+ * sight), so a line that arrives mid-turn doesn't hide the one that started it. Claude Code marks a peer message
+ * origin.kind "peer" (with the sender's name) and anything typed "human"; typed text an agent sent with hc send
+ * starts <hc from="X">, and a watcher note typed as a fallback starts "omniloop:".
+ * Returns { you: a person typed a prompt, from: [senders] }, or null when no prompt is in sight (unknown).
+ */
+export function givenBy(entries, since = null) {
+  const out = { you: false, from: [] };
+  let seen = false;
+  for (const e of entries ?? []) {
+    if (e?.type !== "user" || !e.origin) continue;
+    const at = Date.parse(e.timestamp ?? "");
+    if (since != null && Number.isFinite(at) && at <= since) continue;
+    const c = e.message?.content;
+    if (Array.isArray(c) && c.some((x) => x?.type === "tool_result")) continue;
+    if (e.origin.kind === "peer") { seen = true; out.from.push(typeof e.origin.name === "string" ? e.origin.name : "?"); continue; }
+    if (e.origin.kind !== "human") continue;
+    seen = true;
+    const text = typeof c === "string" ? c : Array.isArray(c) ? c.filter((x) => x?.type === "text").map((x) => x.text).join(" ") : "";
+    const hc = String(text).match(/^\s*<hc from="([^"]+)">/);
+    if (hc) out.from.push(hc[1]);
+    else if (/^\s*omniloop:\s/.test(text)) out.from.push("omniloop");
+    else out.you = true;
+  }
+  if (!seen) return null;
+  out.from = [...new Set(out.from)];
+  return out;
+}
+
 /** The turn record after a Stop: the turn ended, with the last reply (capped). */
-export function turnEnd(prev, { address, pid, input, now }) {
+export function turnEnd(prev, { address, pid, input, now, entries = null }) {
   // No carry-over: a Stop without a reply must not leave the previous turn's words to be quoted as this one's.
   const text = typeof input.last_assistant_message === "string" ? Array.from(input.last_assistant_message).slice(0, TEXT_MAX).join("") : null;
-  return { ...prev, address, pid, sessionId: input.session_id ?? prev?.sessionId ?? null, mode: input.permission_mode ?? prev?.mode ?? null, endedAt: now, text };
+  const sessionId = input.session_id ?? prev?.sessionId ?? null;
+  // first: this is the session's first turn (a started helper's task). null when an older record can't say.
+  const first = prev?.endSession != null ? prev.endSession !== sessionId : !Number.isFinite(prev?.endedAt) ? true : null;
+  const since = first === true ? null : Number.isFinite(prev?.endedAt) ? prev.endedAt : null;
+  return { ...prev, address, pid, sessionId, mode: input.permission_mode ?? prev?.mode ?? null, endedAt: now, text,
+    endSession: sessionId, first, given: entries ? givenBy(entries, since) : null };
 }
 
 /** The turn record after a PostToolUse: when it was a Bash `hc send` / `omniloop send`, the turn is marked reported. Otherwise null (no change). */

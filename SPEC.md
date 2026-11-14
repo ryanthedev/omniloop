@@ -83,6 +83,12 @@ it checks timers and stalls.
   `omniloop: t3 blocked (question): which db?`. Each thing is told once (by address, kind and turn).
 - **Batching:** notes for an agent wait while it works or is blocked (`hc send` refuses a blocked program),
   then go as one line when it stops. A busy lead gets one wake-up for many members.
+- **Only work it was given (2026-11-13):** a "finished its turn" note wakes the parent only for a turn the parent
+  started (a message from it, or its `hc send`), one omniloop started (a note, a timer), or a started helper's
+  first prompt (its task). A turn a person typed, or one another session asked for, goes to the loop feed only:
+  waking an idle lead costs a whole turn, often on a cold prompt cache. The Stop hook reads who gave the turn from
+  the transcript (`origin.kind` `peer` or `human`; typed `<hc from="X">` and `omniloop:` are agents'). A session
+  whose hook didn't record it is told as before. Rule: `core/watch.js` `worthTelling`.
 - **No re-routing:** a note already delivered to a parent isn't re-sent up the chain when that parent
   blocks later; only an escalation to you is news again.
 - **Stalls:** working with no event for 20 minutes (`STALL_MS`) is told once, routed like a block. This
@@ -103,13 +109,13 @@ Herdr's **+** menu (`tab.new`) makes a terminal with no omniloop labels. Left th
 unrelated loop ("top of the list") and the loop tab bar dropped it. So the watcher adopts it: a terminal it sees
 **created** (never one already open), live, on this machine, unlabelled, not a `parent` helper and not named
 `omniloop-watch`, gets `omniloop=<id>`, `omniloop.to=<lead>` (no `to` when you lead) and `omniloop.job=<tab name>`
-(none when Herdr only numbered the tab) when it sits in the loop's **own** space (the one named after it, read from
+(none when Herdr only numbered the tab) and `omniloop.adopted=1` (its first prompt is a person's, not a task) when it sits in the loop's **own** space (the one named after it, read from
 the `where` label) and every live, labelled, unretired member in that space belongs to the loop. A space the loop's
 members merely sit in (plenary-m2's members in the `plenary` space) adopts nothing. It waits 3 s
 (`ADOPT_AFTER_MS`; the watcher ticks again then), so a terminal its maker labels right after making it (`omniloop new`
 starting a lead with `tab.new`) is left alone, and gives up after 60 s. `omniloop leave --terminal <t>` undoes it and
 sticks. Only the all-loops watcher adopts (not `--loop` or `--dry-run`). Once adopted it is a member like any other:
-the lead hears when its turns finish, `omniloop rm` stops it, and a temporary loop doesn't end while it's open. Rule: `core/watch.js` `adoptions`.
+the lead hears when turns it gave finish (not ones you typed there), `omniloop rm` stops it, and a temporary loop doesn't end while it's open. Rule: `core/watch.js` `adoptions`.
 
 ## When you last interacted
 
