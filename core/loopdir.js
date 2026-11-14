@@ -171,6 +171,8 @@ The main agent only coordinates for the user and writes no code itself. It dispa
 
 - **Build:** \`code-foundations:build-agent\`, on Sonnet.
 - **Review:** \`code-foundations:post-gate-agent\`, on Opus. An independent review of every build before it counts as done.
+- **Build via codex (needs the sdd plugin):** \`sdd:codex-builder\` hands a scoped build to the codex CLI through the sdd plugin, then checks the diff and tests itself. Prefer it for well-scoped builds, and especially when Claude usage is tight (\`ugov status\` shows a shift hint). A codex build still gets the independent review above before it counts as done.
+- **Second review via codex (needs the sdd plugin):** \`sdd:codex-reviewer\` is an independent non-Claude review; its findings are verified before it reports.
 - **Research:** the Explore agent, or the \`code-foundations:research\` skill.
 - **Plan:** the \`code-foundations:plan\` skill. Plans feed \`code-foundations:build\`.
 - **Judge, rank, triage:** \`sdd:gemini-judge\`. Ranks, filters or checks a batch (files, screenshots, videos, candidates) with Gemini Decisions for fractions of a cent, so deciding what to do next never burns Claude quota.

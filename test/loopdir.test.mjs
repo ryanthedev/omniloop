@@ -78,3 +78,13 @@ test("every loop's CLAUDE.md says other loops may share its folders, without nam
   const again = updateClaudeMd(md, newManifest({ id: "a", dirs: ["/r/repos/x", "/r/y"] }));
   assert.equal(again.match(/### Other loops may work here too/g).length, 1);
 });
+
+test("CLAUDE.md: codex build and review agents are listed beside the Claude ones, flagged as needing the sdd plugin", () => {
+  const md = claudeMd(newManifest({ id: "cx", dirs: [] }));
+  assert.match(md, /code-foundations:build-agent.*Sonnet/, "Claude options stay");
+  assert.match(md, /code-foundations:post-gate-agent.*Opus/);
+  assert.match(md, /Build via codex \(needs the sdd plugin\).*`sdd:codex-builder`.*codex CLI.*ugov status/);
+  assert.match(md, /Second review via codex \(needs the sdd plugin\).*`sdd:codex-reviewer`.*verified/);
+  assert.match(md, /codex build still gets the independent review/);
+  assert.match(claudeMd({ ...newManifest({ id: "cx", dirs: [] }), temp: true }), /sdd:codex-builder/);
+});
