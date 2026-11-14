@@ -463,8 +463,11 @@ async function cmdBootstrap({ flags, rest }) {
     // Real folders only: a renamed loop leaves its old name as a link to the new folder.
     const names = [];
     for (const n of (await readdir(root).catch(() => [])).sort()) if (validId(n) && (await lstat(join(root, n)).catch(() => null))?.isDirectory()) names.push(n);
-    if (!names.length) return console.log("no loops here");
-    for (const n of names) console.log(await bootstrapOne(n, dry));
+    // A folder with no loop.json isn't a loop (say, a projects folder): skip it quietly. A broken loop.json still gets its note.
+    const loops = [];
+    for (const n of names) if (await exists(join(loopHome(homedir(), n), "loop.json"))) loops.push(n);
+    if (!loops.length) return console.log("no loops here");
+    for (const n of loops) console.log(await bootstrapOne(n, dry));
     return;
   }
   const id = rest[0] ?? (await loopOfMe(flags));

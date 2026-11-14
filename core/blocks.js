@@ -9,17 +9,27 @@ function lineStarts(text, marker) {
   return [...text.matchAll(new RegExp(`^${esc(marker)}[ \\t]*\\r?$`, "gm"))].map((m) => m.index);
 }
 
+const MARKER_LINE = /^<!-- \/?omniloop:\w+ -->[ \t]*\r?$/;
+
+/** `body` with every inner line that would read as a marker indented by one space; its own first and last line stay. */
+function defuse(body, start, end) {
+  const lines = body.split("\n"), last = lines.length - 1;
+  return lines.map((l, i) => (MARKER_LINE.test(l) && !(i === 0 && l === start) && !(i === last && l === end) ? ` ${l}` : l)).join("\n");
+}
+
 /**
  * Put `body` (the block, markers included) between `start` and `end` in `text`.
  * - one clean pair: what is between them is replaced, every other byte stays;
  * - no markers at all: `anchor(text, body)` returns the text with the block inserted;
- * - anything else (one marker, duplicates, wrong order, a marker quoted mid-line): the text comes back unchanged.
+ * - anything else (one marker alone on its line, duplicates, wrong order): the text comes back unchanged.
+Text that merely quotes a marker mid-line is not a marker.
  * Returns { text, note }; note is null unless the markers are damaged.
  */
 export function replaceBlock(text, start, end, body, anchor) {
   const a = lineStarts(text, start), b = lineStarts(text, end);
+  body = defuse(body, start, end);   // inserted text can never forge a marker
   if (a.length === 1 && b.length === 1 && b[0] > a[0]) return { text: text.slice(0, a[0]) + body + text.slice(b[0] + end.length), note: null };
-  if (!a.length && !b.length && !text.includes(start) && !text.includes(end)) return { text: anchor(text, body), note: null };
+  if (!a.length && !b.length) return { text: anchor(text, body), note: null };
   const name = start.match(/omniloop:(\w+)/)?.[1] ?? "managed";
   return { text, note: `CLAUDE.md ${name} block markers are damaged: left alone` };
 }

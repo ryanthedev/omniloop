@@ -155,3 +155,15 @@ test("a loop's projects keep their CONTEXT.md in the projects block through boot
   assert.match(readFileSync(md, "utf8"), /new notes/);
   assert.doesNotMatch(readFileSync(md, "utf8"), /made-up notes/);
 });
+
+test("bootstrap --all skips a folder with no loop.json silently, but notes a broken loop.json", () => {
+  const s = sandbox();
+  s.make("real");
+  mkdirSync(join(s.home, "loops/projects"));
+  mkdirSync(join(s.home, "loops/broken"));
+  writeFileSync(join(s.home, "loops/broken/loop.json"), "{nope");
+  const out = s.ok("bootstrap", "--all");
+  assert.match(out, /real/);
+  assert.doesNotMatch(out, /projects/);
+  assert.match(out, /broken: loop\.json can't be used \(not valid JSON\): left alone/);
+});
