@@ -1,7 +1,8 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings, terminals, focused } from "herdr";
+import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, terminals, focused } from "herdr";
 import { loopTabs, whoIs, agentLabel, closeCommand } from "./core/view.js";
+import { FOCUS_KEY, FOCUS_EVERY_MS, mergeFocus, stampFocus } from "./core/focus.js";
 
 // Loop tabs: Herdr's tab bar (a copy of mods/tabs), except that while you're in a terminal that belongs to an
 // omniloop, the bar lists every session in that loop, from any space or machine: the coordinator first, then its
@@ -24,8 +25,16 @@ const closeButton = (t, tab, close = () => run("tab.close", { id: tab })) => div
   .on_click((_e, cx) => { cx.stop_propagation(); close(); }).child(svg("mods/pane/close.svg").size(12));
 
 export default class Tabs extends View {
-  init() {
+  init(_props, cx) {
     this.pressed = null;
+    // When you were last in each loop agent's terminal. This bar is always on screen, so it keeps the shared record
+    // the picker, panel and status rank by; seeded from what is stored so a restart loses nothing.
+    let mine = {};
+    try { mine = JSON.parse(localStorage.getItem("withYou") ?? "{}"); } catch {}
+    this.withYou = mergeFocus(Date.now(), shared(FOCUS_KEY), mine);
+    setShared(FOCUS_KEY, this.withYou);
+    // A terminal you stay in is re-stamped even when nothing else redraws the bar.
+    cx.timer.every(FOCUS_EVERY_MS, (cx) => cx.notify());
     this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}");
   }
 
@@ -88,9 +97,20 @@ export default class Tabs extends View {
     return [chip, ...lt.tabs.map(item)];
   }
 
+  trackFocus(all) {
+    // Another mod may have written meanwhile (the record is shared): keep the newest of both.
+    const seen = mergeFocus(Date.now(), shared(FOCUS_KEY), this.withYou);
+    const next = stampFocus(seen, focused()?.terminal, all, Date.now());
+    if (!next) { this.withYou = seen; return; }
+    this.withYou = next;
+    try { localStorage.setItem("withYou", JSON.stringify(next)); } catch {}
+    setShared(FOCUS_KEY, next);
+  }
+
   render() {
     const t = theme();
     const all = terminals();
+    this.trackFocus(all);
     const lt = loopTabs(all, focused()?.terminal ?? null, this.sticky ?? null);
     this.sticky = lt?.loop ?? (focused()?.terminal ? null : this.sticky);
     const space = spaces().find(p => p.active);

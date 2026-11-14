@@ -13,7 +13,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { terminals, theme, run, exec, home, readTextFile, watchFolder, playSound, shared, setShared, focused } from "herdr";
+import { terminals, theme, run, exec, home, readTextFile, watchFolder, playSound, shared, setShared } from "herdr";
 import { buildView, alertKey } from "./core/view.js";
 import { openGoals } from "./core/goals.js";
 import { openTasks } from "./core/tasks.js";
@@ -39,9 +39,6 @@ export default class Omniloop extends View {
     this.handle = cx.focus_handle();
     // Test hook: a test home's shared.json {"omniloop.test": {"help": true}} opens it at start.
     if (shared("omniloop.test")?.help) this.keysHelp.open(cx);
-    // When you were last in each loop agent's terminal (ms), kept across restarts.
-    try { this.withYou = JSON.parse(localStorage.getItem("withYou") ?? "{}"); } catch { this.withYou = {}; }
-    setShared("omniloop.withYou", this.withYou);
     // Chat. chatPick: the loop you chose (null: the top-ranked local loop); chatId: the one shown now.
     this.chatPick = null; this.chatId = null; this.chatGen = 0;
     this.chat = { entries: [], error: null, notice: null, thread: null };
@@ -142,19 +139,6 @@ export default class Omniloop extends View {
       }
       this.sending = false; cx.notify();
     });
-  }
-
-  // Being in a loop agent's terminal counts as interacting with it; refreshed on every render (at least every 15 s).
-  trackFocus(all) {
-    const f = focused()?.terminal;
-    if (!f) return;
-    const t = all.find((x) => x.address === f);
-    if (!t?.labels?.omniloop) return;
-    const now = Date.now();
-    if (now - (this.withYou[f] ?? 0) < 10_000) return;
-    this.withYou[f] = now;
-    try { localStorage.setItem("withYou", JSON.stringify(this.withYou)); } catch {}
-    setShared("omniloop.withYou", this.withYou); // the picker ranks by it too
   }
 
   sound(forYou) {
@@ -278,10 +262,9 @@ export default class Omniloop extends View {
   render(cx) {
     const t = theme();
     const all = terminals();
-    this.trackFocus(all);
     const ids = [...new Set(all.map((x) => x.labels?.omniloop).filter(Boolean))].sort();
     if (ids.join() !== (this.ids ?? []).join()) { this.ids = ids; this.reload?.(cx); }
-    const v = buildView(all, this.watcher, Date.now(), this.withYou);
+    const v = buildView(all, this.watcher, Date.now(), shared("omniloop.withYou") ?? {}); // recorded by the loop tab bar (mod-tabs)
     this.sound(v.forYou);
     const local = v.loops.filter((l) => isLocal(l.id));
     const chatId = local.find((l) => l.id === this.chatPick)?.id ?? this.chatSeed ?? local[0]?.id ?? null;

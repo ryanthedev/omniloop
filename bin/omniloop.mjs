@@ -660,6 +660,9 @@ async function cmdReply({ flags, rest }) {
     await postFeed(id, "omniloop", "no coordinator is running; nobody got this");
     return console.log(`no coordinator is running in ${id}; nobody got this`);
   }
+  // Any reply from you counts as interacting with this loop, even when it is held: the watcher records a changed
+  // omniloop.you label like a typed prompt. Never lets the reply fail.
+  await run("hc", ["label", coordinator, `${LABEL.you}=${Date.now()}`], { timeout: 5000 }).catch(() => {});
   if (plan.send) {
     try {
       await run("hc", ["send", ...(plan.send.if ? ["--if", plan.send.if] : []), coordinator, text], { timeout: SEND_TIMEOUT_MS });

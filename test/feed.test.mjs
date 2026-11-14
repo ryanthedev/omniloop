@@ -147,7 +147,7 @@ const out = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
 if (cfg.down && a[0] !== "events") { out({ error: { kind: "internal", message: "cannot save terminals: registry writer stopped" } }); process.exit(1); }
 if (a[0] === "ls") out({ terminals: cfg.terms.map((t) => ({ address: t.address })) });
 else if (a[0] === "get") { const t = cfg.terms.find((x) => x.address === a[1]); if (t) out(t); else process.exit(1); }
-else if (a[0] === "label") process.exit(0);
+else if (a[0] === "label") { fs.appendFileSync(d + "/labels.log", JSON.stringify(a.filter((x) => x !== "--json")) + "\\n"); process.exit(cfg.labelExit || 0); }
 else if (a[0] === "send") { fs.appendFileSync(d + "/sends.log", JSON.stringify(a.filter((x) => x !== "--json")) + "\\n"); if (cfg.sendOut) process.stderr.write(cfg.sendOut); process.exit(cfg.sendExit || 0); }
 else if (a[0] === "events") { out({ terminals: cfg.terms }); for (const [ms, ev] of cfg.events || []) setTimeout(() => out(ev), ms); setInterval(() => {}, 1e6); }
 else process.exit(1);
@@ -165,8 +165,9 @@ async function cli(t, cfg = { terms: [] }) {
   const cmd = (args, extra = {}) => run("node", [BIN, ...args], { env: { ...env, ...extra } });
   const feedOf = async () => parseFeed(await readFile(s.feed, "utf8").catch(() => ""));
   const sends = async () => (await readFile(join(bin, "sends.log"), "utf8").catch(() => "")).split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const labels = async () => (await readFile(join(bin, "labels.log"), "utf8").catch(() => "")).split("\n").filter(Boolean).map((l) => JSON.parse(l));
   const timers = async () => Promise.all((await readdir(join(cache, "timers")).catch(() => [])).filter((f) => f.endsWith(".json")).map(async (f) => JSON.parse(await readFile(join(cache, "timers", f), "utf8"))));
-  return { ...s, bin, cache, cmd, feedOf, sends, timers, cfg: (c) => stubHc(bin, c) };
+  return { ...s, bin, cache, cmd, feedOf, sends, labels, timers, cfg: (c) => stubHc(bin, c) };
 }
 const brief = (f) => f.map(({ from, text }) => `${from}: ${text}`);
 
@@ -236,6 +237,28 @@ test("DW-2.2 reply to a working coordinator is held as a due-now note timer, and
   const f = brief(await c.feedOf());
   assert.equal(f[0], "you: hello");
   assert.match(f[1], /^omniloop: your reply waits for a watcher: none is running/);
+});
+
+test("reply labels the coordinator omniloop.you=<now>, held or sent; a failing label call never fails the reply", async (t) => {
+  for (const status of ["idle", "working"]) {
+    const c = await cli(t, { terms: [coordinator(status)] });
+    const before = Date.now();
+    await c.cmd(["reply", "hi", "--loop", "X"]);
+    const [l] = await c.labels();
+    assert.equal(l.length, 3); assert.deepEqual(l.slice(0, 2), ["label", "t1"]);
+    const ms = Number(l[2].match(/^omniloop\.you=(\d+)$/)?.[1]);
+    assert.ok(ms >= before && ms <= Date.now());
+  }
+  const c = await cli(t, { terms: [coordinator("idle")], labelExit: 1 });
+  const { stdout } = await c.cmd(["reply", "hi", "--loop", "X"]);
+  assert.match(stdout, /^sent to t1/);
+  assert.equal((await c.sends()).length, 1);
+});
+
+test("reply with no coordinator labels nothing", async (t) => {
+  const c = await cli(t, { terms: [] });
+  await c.cmd(["reply", "hi", "--loop", "X"]);
+  assert.deepEqual(await c.labels(), []);
 });
 
 test("reply held with a live watcher: no 'waits for a watcher' line; a stale or dead watcher doesn't count", async (t) => {
