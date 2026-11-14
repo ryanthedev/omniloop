@@ -22,6 +22,7 @@ import { userInfo, hostname } from "node:os";
 import { deliver, liveSessions, hookRecords, turnRecord, foregroundPid } from "./lib/sock.mjs";
 import { YOU, addTask, finishTask, giveTask, editTask, reopenTask, removeTask, openTasks, taskLines, taskNote, tasksOf } from "../core/tasks.js";
 import { claudeProjectKey, isLoopClaudeEntry, renamedManifest, renameText, withFormerlyNote, removeCheck, endedTempLoops, tempId, scrubHistory, NO_MEMORY_ENV, NO_MEMORY_TOOLS } from "../core/lifecycle.js";
+import { goalHint } from "../core/goalwords.js";
 
 const run = promisify(execFile);
 const HOME = process.env.OMNILOOP_HOME ?? join(homedir(), ".cache", "omniloop");
@@ -550,6 +551,11 @@ async function cmdGoal({ flags, rest }) {
     } else if (st) later.push(t.address);
   }));
   console.log(note);
+  if (sub !== "done") {
+    const n = sub === "edit" ? rest[0] : sub === "add" ? goalsOf(next).at(-1)?.n : openGoals(next)[0]?.n;
+    const hint = goalHint(sub === "edit" ? rest.slice(1).join(" ") : rest.join(" "), n ?? 1);
+    if (hint) console.log(hint);
+  }
   if (told.length) console.log(`told: ${told.join(", ")}`);
   if (later.length) console.log(`not told (busy): ${later.join(", ")}; they'll see it in CLAUDE.md or \`omniloop goal\``);
 }
@@ -803,6 +809,8 @@ const BRIEF = `omniloop: you are in a loop (a piece of work with one coordinator
   omniloop timer 20m "<what to check>"    get a note later; don't sleep or poll
   omniloop needs-you [off]                this block is the user's (credentials, spending, anything public)
   omniloop goal [set "…" | add "…" | edit N "…" | done N]   the user's end goal for this loop (always one); your work serves it
+    a goal is one plain sentence the user would say: what is true when it's done (30 words or fewer). No file paths,
+    job or phase numbers, or plans; those go in tasks. Like: "Use omni instead of Herdr for daily work on the Mac."
   omniloop task [ls | add "…" --for you|me|t3 | done N | give N t3 | edit N "…" | reopen N | rm N | move N <loop>]
   omniloop say "…" [--thread T]           post to the loop's chat feed (the user reads it there)
   omniloop add-dir <path> | rm-dir <path> add or remove a context folder of the loop (CLAUDE.md lists them)
