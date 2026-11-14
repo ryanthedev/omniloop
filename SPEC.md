@@ -128,8 +128,14 @@ Each loop shows when you last interacted with it ("you 5m"), and the view ranks 
 
 herdr-core records no "last key a person pressed", so "interacted" means either of:
 
-- **Focus:** you were in its terminal. The main mod records it (`trackFocus` in `mod/main.js`, at most every 10 s) into the
-  shared `omniloop.withYou`, which the picker, panel and status read.
+- **Focus:** you were in its terminal. The loop tab bar (`mod-tabs/main.js`, installed as `loop-tabs`, the mod the layout
+  always shows; rules in `core/focus.js`) records it, at most every 10 s per terminal and only for terminals with the
+  `omniloop` label, into the shared `omniloop.withYou` (`{ [address]: ms }`). A 10 s timer redraws the bar so staying in one
+  terminal keeps counting, and it starts from the stored value. The picker, panel, status and main mod read it.
+- **Replied:** you sent a message with `omniloop reply` (the panel and pane chat box run it). `cmdReply` sets
+  `omniloop.you=<ms>` on the loop's coordinator terminal, sent or held (5 s timeout, failure ignored: it never fails the
+  reply); the watcher records it like a typed prompt. With no coordinator running there is nothing to label, and only the
+  index's `touched` (the feed's mtime) moves.
 - **Prompted:** you typed a prompt into it. The UserPromptSubmit hook (`bin/ask-hook.mjs`, shipped in `plugin/hooks`)
   sets the label `omniloop.you=<ms>` on the terminal it runs in, unless the prompt is empty or not a person's
   (starts with `omniloop:` (omniloop's own notes), `<hc from=`, `<cross-session-message` or "Another Claude session sent a message"). The
