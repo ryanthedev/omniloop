@@ -17,6 +17,12 @@ function find(node, id) {
   return null;
 }
 
+// Shared by both bars: a program's icon, and the close × shown on the active tab.
+const programIcon = (t, program) => program?.icon
+  ? [program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14)] : [];
+const closeButton = (t, tab) => div().id(`close-${tab}`).text_color(t.dim).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+  .on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", { id: tab }); }).child(svg("mods/pane/close.svg").size(12));
+
 export default class Tabs extends View {
   init() {
     this.pressed = null;
@@ -55,19 +61,29 @@ export default class Tabs extends View {
   loopItems(t, lt) {
     const chip = h_flex().id("loop-chip").h(29).px(9).gap(6).rounded(7).items_center().flex_none().text_size(12.5).font_semibold()
       .bg(t.selected ?? t.raised).text_color(t.foreground).child(`◎ ${lt.loop}`);
-    const item = (m) => h_flex().id(`lt-${m.address}`).h(29).px(10).gap(7).rounded(7).items_center().flex_none().text_size(12.8)
+    // A member with a pane in this window gets the normal tab controls: icon, close, rename, menu. Drag is left
+    // out, since the loop's order is the member tree.
+    const item = (m) => {
+      const pane = panes().find(p => p.terminal === m.address);
+      const tab = pane?.tab;
+      const space = tab ? spaces().find(sp => sp.tabs.some(x => x.id === tab)) : null;
+      return h_flex().id(`lt-${m.address}`).h(29).px(10).gap(7).rounded(7).items_center().flex_none().text_size(12.8)
       .border(1).border_color(m.active ? t.border : t.chrome).bg(m.active ? t.raised : t.chrome).text_color(m.active ? t.foreground : t.muted)
       .hover(s => s.bg(t.hover))
-      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); if (tab && e.click_count === 2) run("tab.rename", { id: tab }); })
+      .when(Boolean(tab && space), el => el.on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: tab, space: space.id } } }); }))
       // A member with no pane (e.g. made while the window couldn't add its tab) can't be focused: peek at it
       // instead, which shows it over the tab with a "keep as tab" control.
-      .on_click(() => panes().some(p => p.terminal === m.address) ? run("pane.focus", { terminal: m.address }) : run("terminal.peek", { terminal: m.address }))
+      .on_click(() => pane ? run("pane.focus", { terminal: m.address }) : run("terminal.peek", { terminal: m.address }))
+      .children(programIcon(t, pane?.program))
       .when(m.isLead, el => el.child(div().text_size(11).text_color(t.muted).child("★")))
       .child(div().flex_none().text_size(10.5).font_semibold().text_color(t.dim).child(m.address))
       .child(div().max_w(170).truncate().child(m.name))
       .when(Boolean(m.machine), el => el.child(div().px(5).h(16).rounded(4).bg(t.hover).text_size(10).text_color(t.dim).flex().items_center().child(m.machine)))
       .when(m.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
-      .when(m.status === "blocked" || m.status === "done", el => el.child(div().size(6).rounded(3).bg(t[m.status])));
+      .when(m.status === "blocked" || m.status === "done", el => el.child(div().size(6).rounded(3).bg(t[m.status])))
+        .when(Boolean(tab && m.active), el => el.child(closeButton(t, tab)));
+    };
     return [chip, ...lt.tabs.map(item)];
   }
 
@@ -97,12 +113,12 @@ export default class Tabs extends View {
           else run("tab.select", { id: c.id });
         })
         .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: c.id, space: space.id } } }); })
-        .when(Boolean(program?.icon), el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14)))
+        .children(programIcon(t, program))
         .when(Boolean(lead), el => el.child(div().flex_none().text_size(10.5).font_semibold().text_color(t.dim).child(lead)))
         .child(div().max_w(170).truncate().child(c.zoomed ? `${name} Z` : name))
         .when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
         .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(3).bg(t[c.status])))
-        .when(c.active, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", { id: c.id }); }).child(svg("mods/pane/close.svg").size(12))));
+        .when(c.active, el => el.child(closeButton(t, c.id)));
     };
     const root = layout(), sidebar = find(root, "sidebar"), w = window();
     // Old saved rails and a dragged-narrow sidebar can be smaller than the window buttons.
