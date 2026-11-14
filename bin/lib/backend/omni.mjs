@@ -18,7 +18,7 @@ export function sendArgs(address, text, guard = null) {
 
 export class OmniBackend {
   name = "omni";
-  words = { read: "omni capture --pane <t>", wait: "omni wait", down: "the omni daemon" };
+  words = { read: "omni capture --pane <t>", wait: "omni capture", down: "the omni daemon" };
   eventsReconnect = true; // the daemon ends a watcher that falls behind (pane.dropped): the watcher reconnects
 
   /** draftWaitMs: how long a typed note waits for a person's draft (0 turns the emulation off). */
