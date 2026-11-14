@@ -63,6 +63,9 @@ test("omniloop new: first loop stays in place; a second loop on the same repo ge
   const md = readFileSync(join(s.home, "loops", "second", "CLAUDE.md"), "utf8");
   assert.match(md, /your own copy is `.*wt\/app`/);
   assert.match(md, /Other loops may work here too/);
+  assert.equal(d.onto, "main", "the shared checkout's branch when the worktree was made");
+  assert.match(md, /must be clean and on `main` before/);
+  assert.match(md, /starts bare/);
 });
 
 test("fails soft and skips: no commits, subfolder, not git, live config, branch already exists, dry run", () => {

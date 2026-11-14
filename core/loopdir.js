@@ -7,7 +7,7 @@
 // CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1 so those folders' own CLAUDE.md files load too.
 // Their sessions are saved under one Claude project (the loop folder), so a loop's history stays together.
 
-import { replaceBlock } from "./blocks.js";
+import { replaceBlock, startOfBlock } from "./blocks.js";
 
 export const LOOPS_DIR = "loops";
 export const ADD_DIR_ENV = "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD";
@@ -77,8 +77,9 @@ export function worktreeTarget(loopHomePath, path, taken = []) {
 export const worktreeBranch = (id) => `${id}/work`;
 
 /** Record a worktree on a folder entry. Returns a new manifest. */
-export function setWorktree(manifest, path, { worktree, branch, base, dirty = 0 }) {
-  return { ...manifest, dirs: manifest.dirs.map((d) => (d.path === path && !d.machine ? { ...d, worktree, branch, base, dirty } : d)) };
+// onto: the shared checkout's branch when the worktree was made, which the loop lands on (absent in older manifests).
+export function setWorktree(manifest, path, { worktree, branch, base, dirty = 0, onto = undefined }) {
+  return { ...manifest, dirs: manifest.dirs.map((d) => (d.path === path && !d.machine ? { ...d, worktree, branch, base, dirty, ...(onto ? { onto } : {}) } : d)) };
 }
 
 /** The folders an agent on `machine` (null = this computer) can be given with --add-dir. */
@@ -86,16 +87,27 @@ export function dirsOn(manifest, machine = null) {
   return manifest.dirs.filter((d) => (d.machine ?? null) === (machine ?? null)).map((d) => d.path);
 }
 
+const WORK_START = "<!-- omniloop:work -->";
+const WORK_END = "<!-- /omniloop:work -->";
+
+// The "keep tasks current" rule: managed, so every loop gets a change to it (omniloop bootstrap). The subagent roster
+// stays in the template's own "How to work" text, which the loop may edit.
+const WORK_TEXT = `Keep tasks current so the user can follow along in the panel and in \`omniloop task ls\`:
+
+- **Coordinator:** make every piece of work an \`omniloop task\` before it starts (\`--for me\`; \`--for you\` for a decision only the user can make; \`give N <agent>\` for a subagent's work), mark it \`omniloop task done N\` when it lands, and keep it current.
+- **Every agent:** keep your own todo list (the in-session one) updated while you work.`;
+const workBlock = () => `${WORK_START}\n${WORK_TEXT}\n${WORK_END}`;
+
 const CONTEXT_START = "<!-- omniloop:context -->";
 const CONTEXT_END = "<!-- /omniloop:context -->";
 
 function contextBlock(manifest) {
   const dirs = manifest.dirs.length
     ? manifest.dirs.map((d) => d.worktree
-      ? `- \`${d.path}\`: **your own copy is \`${d.worktree}\`** (git worktree, branch \`${d.branch}\`, from ${d.base}). Work there, not\n  in \`${d.path}\`, which other loops use.${d.dirty ? ` It started from the last commit: ${d.dirty} uncommitted file(s) in\n  the shared checkout are not in your copy.` : ""} To land: tests pass in your copy, then \`git -C ${d.path} status\`\n  must be clean before \`git -C ${d.path} merge --ff-only ${d.branch}\` (rebase on its branch first if it moved).`
+      ? `- \`${d.path}\`: **your own copy is \`${d.worktree}\`** (git worktree, branch \`${d.branch}\`, from ${d.base}). Work there, not\n  in \`${d.path}\`, which other loops use.${d.dirty ? ` It started from the last commit: ${d.dirty} uncommitted file(s) in\n  the shared checkout are not in your copy.` : ""} To land: tests pass in your copy, then \`git -C ${d.path} status\`\n  must be clean${d.onto ? ` and on \`${d.onto}\`` : ` (check \`git -C ${d.path} branch --show-current\` first: it is the branch you land on)`} before \`git -C ${d.path} merge --ff-only ${d.branch}\` (rebase on its branch first if it moved).`
       : `- \`${d.path}\`${d.machine ? ` (on ${d.machine})` : ""}`).join("\n")
     : "- (none yet: `omniloop add-dir <path>`)";
-  return `${CONTEXT_START}\n## Context\n\nThe folders this loop works in (each was given to you with --add-dir). Work in them by absolute\npath, e.g. \`git -C <folder> status\`; this loop folder is for the loop's own notes.\n\n${dirs}\n\n${SHARED_RULES}\n${CONTEXT_END}`;
+  return `${CONTEXT_START}\n## Context\n\nThe folders this loop works in (each was given to you with --add-dir). Work in them by absolute\npath, e.g. \`git -C <folder> status\`; this loop folder is for the loop's own notes.\n\n${dirs}\n\n${SHARED_RULES}${gitRules(manifest)}\n${CONTEXT_END}`;
 }
 
 // Names no other loop: who shares a folder changes, so \`omniloop shared\` looks it up live.
@@ -105,11 +117,27 @@ These folders can be shared with other loops, at the same time as you. \`omniloo
 
 - **Before a change, say so:** run \`omniloop shared\`; if another loop is in that folder, tell its coordinator which files
   you'll touch (\`omniloop send <coordinator> "…"\`), and answer such notes from them. Once per change, not per edit.
-- **In a git repo, use your own copy:** when a folder above names your own copy (a git worktree), work there and
-  land it as it says. Otherwise work on a \`<loop>/<topic>\` branch (or a \`git worktree\`), not on the checkout
-  others use. Merge only with the tests passing.
 - **Never change what others stand on without the user:** \`git init\`, reset, force-push, rewriting a shared branch,
   or moving or deleting files you didn't make.`;
+
+/** The git rules: none without folders; the worktree rules only when a folder has a worktree. */
+function gitRules(manifest) {
+  if (!manifest.dirs.length) return "";
+  const general = `### Git
+
+- **Never switch the branch of a folder others use.** Work in your own copy when one is named above. Otherwise
+  make one: \`git -C <folder> worktree add ~/loops/${manifest.id}/wt/<name> -b ${manifest.id}/<topic>\`.
+- **No \`git stash\`:** every copy of a repo shares one stash list, so another loop can pop yours. Commit work in
+  progress on your branch instead.
+- **Subagents:** give them your copy's absolute path. Don't start them with \`isolation: "worktree"\`: that puts
+  them in a new, separate copy.
+- **To read someone else's repo:** \`git clone --depth 1 <url> ref/<name>\` in this loop folder, not in \`~/repos\`.`;
+  const copy = `- **Your copy starts bare:** no \`node_modules\`, build output or \`.env\`. Install or build there before you test.
+  Commit hooks run there too; don't skip them with \`--no-verify\`.
+- **Stay on your branch.** Landing is the local merge above; push only when the user asks.
+- **Leave cleanup to \`omniloop rm\` and \`rm-dir\`:** no \`git worktree remove\`, \`git worktree prune\` or branch deletes.`;
+  return `\n\n${general}${manifest.dirs.some((d) => d.worktree) ? `\n${copy}` : ""}`;
+}
 
 /** Is one path the other, or inside it (by whole folder names, so /a/b-c is not inside /a/b)? */
 export function overlaps(a, b) {
@@ -181,10 +209,7 @@ The main agent only coordinates for the user and writes no code itself. It dispa
 - **Videos:** \`sdd:video-digest\`. A video URL or file into a transcript-plus-visuals digest; falls back to Gemini when agy is out of quota.
 - **Spend:** \`sdd:spend-watch\`. Gemini dollars, Claude governor state and codex quota in one answer. Run it before a large fan-out or a long loop.
 
-Keep tasks current so the user can follow along in the panel and in \`omniloop task ls\`:
-
-- **Coordinator:** make every piece of work an \`omniloop task\` before it starts (\`--for me\`; \`--for you\` for a decision only the user can make; \`give N <agent>\` for a subagent's work), mark it \`omniloop task done N\` when it lands, and keep it current.
-- **Every agent:** keep your own todo list (the in-session one) updated while you work.
+${workBlock()}
 
 ${contextBlock(manifest)}
 
@@ -209,11 +234,20 @@ The ones you'll use most; \`omniloop brief\` has the rest.
 `;
 }
 
-/** Rewrite only the context block of an existing CLAUDE.md, keeping everything else. */
+/**
+ * Rewrite only the managed blocks of an existing CLAUDE.md (work, context), keeping everything else. A block whose
+ * markers are damaged is left alone, with a note in `notes`. The work block, when new, goes just before the context
+ * block, and replaces the old template's unmanaged copy of the same rule.
+ */
 export function updateClaudeMd(text, manifest, notes = []) {
-  const r = replaceBlock(text, CONTEXT_START, CONTEXT_END, contextBlock(manifest), (t, block) => `${t.trimEnd()}\n\n${block}\n`);
-  if (r.note) notes.push(r.note);
-  return r.text;
+  const ctx = replaceBlock(text, CONTEXT_START, CONTEXT_END, contextBlock(manifest), (t, block) => `${t.trimEnd()}\n\n${block}\n`);
+  const work = replaceBlock(ctx.text, WORK_START, WORK_END, workBlock(), (t, block) => {
+    t = t.replace(`${WORK_TEXT}\n\n`, "");
+    const at = startOfBlock(t, CONTEXT_START);
+    return at < 0 ? `${t.trimEnd()}\n\n${block}\n` : `${t.slice(0, at)}${block}\n\n${t.slice(at)}`;
+  });
+  for (const r of [ctx, work]) if (r.note) notes.push(r.note);
+  return work.text;
 }
 
 /**

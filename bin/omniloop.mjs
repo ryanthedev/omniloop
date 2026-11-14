@@ -334,9 +334,10 @@ async function isolateDirs(id, manifest, { dry = false, only = null } = {}) {
       const branch = worktreeBranch(id);
       const has = await git(d.path, ["branch", "--list", branch]);
       await git(d.path, ["worktree", "add", target, ...(has ? [branch] : ["-b", branch])]);
+      const onto = await git(d.path, ["branch", "--show-current"]);
       const base = await git(target, ["rev-parse", "--short", "HEAD"]);
       const dirty = (await git(d.path, ["status", "--porcelain"])).split("\n").filter(Boolean).length;
-      m = setWorktree(m, d.path, { worktree: target, branch, base, dirty });
+      m = setWorktree(m, d.path, { worktree: target, branch, base, dirty, onto });
       lines.push(`  ${d.path}: own copy ${target} on ${branch} (${choice.why})${dirty ? `; ${dirty} uncommitted file(s) there are not in it` : ""}`);
     } catch (e) {
       lines.push(`  ${d.path}: shared (no worktree: ${String(e.stderr || e.message || e).trim().split("\n")[0].slice(0, 140)})`);

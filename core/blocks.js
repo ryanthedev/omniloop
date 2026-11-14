@@ -26,3 +26,6 @@ export function replaceBlock(text, start, end, body, anchor) {
 
 /** Where `end` (a marker alone on its line) is in `text`, or -1. */
 export const endOfBlock = (text, end) => { const p = lineStarts(text, end); return p.length ? p[0] + end.length : -1; };
+
+/** Where `start` (a marker alone on its line) is in `text`, or -1. */
+export const startOfBlock = (text, start) => { const p = lineStarts(text, start); return p.length ? p[0] : -1; };
