@@ -297,6 +297,60 @@ test("R3: rename repairs a hand-made worktree inside the moved folder too", () =
   assert.equal(s.sh("git", ["rev-parse", "--abbrev-ref", "HEAD"], wt).trim(), "hand-x");
 });
 
+// A copy of someone else's worktree dropped into loop "a" must not take that worktree's registration over.
+async function copyThenRenameThenForceRm(s, r, victim) {
+  s.omniloop("new", "a", "--goal", "ga", "--dir", r, "--no-coordinator");
+  const copy = join(s.home, "loops/a/wt/copy");
+  mkdirSync(dirname(copy), { recursive: true });
+  s.sh("cp", ["-R", victim, copy]);
+  const out = s.omniloop("rename", "a", "a2");
+  assert.match(out, /skipped, a copy or move of another worktree/);
+  assert.ok(listed(s, r).includes(victim), "rename left the other registration alone");
+  s.hcIdle();
+  assert.match(s.fails("rm", "a2"), /copy or move of another worktree/);
+  assert.ok(existsSync(join(s.home, "loops/a2/wt/copy")), "refused before removing anything");
+  s.omniloop("rm", "a2", "--force");
+  assert.ok(await s.gone(join(s.home, "loops/a2")));
+  assert.match(s.sh("git", ["status", "--porcelain"], victim), /wip\.txt/, "the original still works");
+  assert.ok(listed(s, r).includes(victim));
+}
+
+test("B1: a cp -r of another loop's worktree survives rename and rm --force without moving that worktree's registration or branch", async () => {
+  const s = sandbox();
+  const r = s.repo("r/app");
+  const victim = handMade(s, r, "other");
+  await copyThenRenameThenForceRm(s, r, victim);
+  assert.ok(branchExists(s, r, "hand-x"));
+});
+
+test("B1: the same for a copy of a worktree that lives outside ~/loops", async () => {
+  const s = sandbox();
+  const r = s.repo("r/app");
+  const victim = join(s.home, "elsewhere/wt");
+  s.sh("git", ["-C", r, "worktree", "add", "-q", "-b", "outside", victim]);
+  writeFileSync(join(victim, "wip.txt"), "uncommitted\n");
+  await copyThenRenameThenForceRm(s, r, victim);
+  assert.ok(branchExists(s, r, "outside"));
+});
+
+test("B2: after mv wt/x wt/y inside a loop, rm refuses before removing anything and rm --force finishes", async () => {
+  const s = sandbox();
+  const r = s.repo("r/app");
+  const old = handMade(s, r, "mv");
+  const wt = s.manifest("mv").dirs[0].worktree;
+  const moved = join(dirname(old), "y");
+  renameSync(old, moved);
+  s.hcIdle();
+  const before = listed(s, r);
+  assert.match(s.fails("rm", "mv"), /copy or move of another worktree/);
+  assert.ok(existsSync(moved) && existsSync(wt), "nothing removed, the recorded worktree included");
+  assert.deepEqual(listed(s, r), before);
+  s.omniloop("rm", "mv", "--force");
+  assert.ok(await s.gone(join(s.home, "loops/mv")));
+  assert.ok(branchExists(s, r, "hand-x"), "no branch changed");
+  assert.ok(!listed(s, r).includes(wt), "the recorded worktree went through git as usual");
+});
+
 test("R4: rm-dir of a subfolder leaves the parent entry's recorded and hand-made worktrees", () => {
   const s = sandbox();
   const r = s.repo("r/app");

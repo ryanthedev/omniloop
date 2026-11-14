@@ -189,7 +189,7 @@ test("chooserRows: filters, marks what the loop has, offers a typed path", () =>
 
 test("placeOf puts a folder's own name first and shortens any home to ~", () => {
   assert.deepEqual(placeOf("/Users/jane.doe@example.com/repos/claude-stuff"), { name: "claude-stuff", where: "~/repos" });
-  assert.deepEqual(placeOf("/home/r/loops/proj/"), { name: "proj", where: "~/loops" });
+  assert.deepEqual(placeOf("/home/jane/loops/proj/"), { name: "proj", where: "~/loops" });
   assert.deepEqual(placeOf("/Users/jane"), { name: "~", where: "" });
   assert.deepEqual(placeOf("/opt/x"), { name: "x", where: "/opt" });
   assert.deepEqual(placeOf("/x"), { name: "x", where: "/" });

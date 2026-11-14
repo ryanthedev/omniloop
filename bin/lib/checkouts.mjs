@@ -11,7 +11,7 @@
 // part of that checkout's folder; a hand-edited loop.json that points outside the loop is not followed.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { lstat, readdir, realpath, stat } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { join, dirname, resolve, basename } from "node:path";
 
 const run = promisify(execFile);
@@ -51,6 +51,26 @@ export async function findCheckouts(root) {
 }
 
 /**
+ * Where the repo says this linked worktree's `.git` is (`<common>/worktrees/<name>/gitdir`, the back-pointer), or null when
+ * it can't be read. A copy (cp -r) or a move (mv) of a worktree folder keeps pointing at the original's registration, so
+ * the back-pointer and the folder disagree.
+ */
+export async function registeredGit(dir) {
+  try {
+    const admin = resolve(dir, (/^gitdir:\s*(.+)$/m.exec(await readFile(join(dir, ".git"), "utf8")) ?? [])[1]);
+    return resolve(admin, (await readFile(join(admin, "gitdir"), "utf8")).trim());
+  } catch { return null; }
+}
+
+/** True unless the registration names another `.git` than this folder's (a copy or move). Unreadable counts as owned: git then fails on its own. */
+export async function ownsRegistration(dir) {
+  const reg = await registeredGit(dir);
+  return !reg || (await realOr(reg)) === (await realOr(join(dir, ".git")));
+}
+
+const NOT_OWNED = "copy or move of another worktree";
+
+/**
  * What is in a checkout, asked from inside it: { dir, kind, dirty (uncommitted files), ahead (commits on its branch, or
  * detached HEAD, not in the repo's own checked-out branch), branch (null when detached), head, locked, via (git prefix
  * for acting on its repo), repo (label for messages), unchecked (why git couldn't say, else null) }.
@@ -64,6 +84,8 @@ export async function checkoutFacts({ dir, kind }) {
     if ((await realpath(await gitVia(["-C", dir], ["rev-parse", "--show-toplevel"]))) !== dir) throw new Error("git doesn't see it as a checkout of its own");
     f.dirty = (await gitVia(["-C", dir], ["status", "--porcelain"])).split("\n").filter(Boolean).length;
     if (kind === "clone") return f;
+    // Never act through git on a registration that belongs to another folder; the folder just goes with the loop.
+    if (!(await ownsRegistration(dir))) return { ...f, unchecked: NOT_OWNED };
     const common = resolve(dir, await gitVia(["-C", dir], ["rev-parse", "--git-common-dir"]));
     const gitdir = resolve(dir, await gitVia(["-C", dir], ["rev-parse", "--git-dir"]));
     f.via = ["--git-dir", common];
@@ -101,6 +123,7 @@ export async function recordedFacts(d, home) {
 export async function dropCheckout(w, force, recordedBranch = null) {
   const lines = [], branch = w.branch ?? recordedBranch;
   if (w.kind !== "linked" || !w.via) { if (w.here) lines.push(`  ${w.dir} is deleted with the loop folder`); return { lines, failed: false }; }
+  if (w.here && !(await ownsRegistration(w.dir))) return { lines: [`  ${w.dir} is a ${NOT_OWNED}: deleted with the loop folder, git left alone`], failed: false };
   if (force && w.ahead && !w.branch && w.head) lines.push(`  detached HEAD of ${w.dir} was ${w.head} (${w.ahead} unmerged commit(s); recover with: git -C ${w.repo} branch rescue ${w.head})`);
   try {
     // Doubled --force only reaches a locked worktree, and only when the user said --force.
@@ -117,12 +140,20 @@ export async function dropCheckout(w, force, recordedBranch = null) {
   return { lines, failed: false };
 }
 
-/** Repair git's registration of every linked worktree under `root` (a loop folder that just moved). Returns note lines. */
-export async function repairCheckouts(root) {
+/**
+ * Repair git's registration of every linked worktree under `root` (a loop folder that just moved from `oldRoots`, its
+ * former real paths). Only a registration that was this very worktree's before the move is repaired: its registered path
+ * must be where this folder was (root + the same subpath under an old root), or already be this folder's `.git`.
+ * Anything else is a copy or move of another worktree: skipped, so it can't take that registration over. Returns note lines.
+ */
+export async function repairCheckouts(root, oldRoots = []) {
   const notes = [];
   for (const c of await findCheckouts(root)) {
     if (c.kind !== "linked") continue;
     try {
+      const reg = await registeredGit(c.dir), own = await realOr(join(c.dir, ".git"));
+      const was = reg && oldRoots.some((o) => isInside(reg, o) && join(root, reg.slice(o.length)) === own);
+      if (reg && !was && (await realOr(reg)) !== own) { notes.push(`  ${c.dir}: skipped, a ${NOT_OWNED} (git still registers ${reg})`); continue; }
       const common = resolve(c.dir, await gitVia(["-C", c.dir], ["rev-parse", "--git-common-dir"]));
       await gitVia(["--git-dir", common], ["worktree", "repair", c.dir]);
       await gitVia(["-C", c.dir], ["rev-parse", "--git-dir"]);

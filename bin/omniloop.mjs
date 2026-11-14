@@ -931,11 +931,12 @@ async function cmdRename({ flags, rest }) {
   let next = renamedManifest(m, { from, to, fromHome, toHome, now });
   if (flags["dry-run"]) return console.log(JSON.stringify({ move: [fromHome, toHome], relabel: agents?.map((t) => t.address) ?? `${backend.name} down`, space: sp ?? null, dirs: next.dirs }, null, 1));
 
+  const oldReal = await realpath(fromHome);
   await rename(fromHome, toHome);
   await symlink(toHome, fromHome);
   const lines = [];
   // Worktrees moved with the folder, hand-made ones too (found on disk): repoint git at each, then rename omniloop's branches.
-  lines.push(...(await repairCheckouts(await realpath(toHome))));
+  lines.push(...(await repairCheckouts(await realpath(toHome), [oldReal])));
   next = { ...next, dirs: await Promise.all(next.dirs.map(async (d, i) => {
     const old = m.dirs[i];
     if (!d.worktree || d.machine || d.worktree === old.worktree || d.branch === old.branch) return d;
