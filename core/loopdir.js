@@ -174,6 +174,11 @@ The main agent only coordinates for the user and writes no code itself. It dispa
 - **Research:** the Explore agent, or the \`code-foundations:research\` skill.
 - **Plan:** the \`code-foundations:plan\` skill. Plans feed \`code-foundations:build\`.
 
+Keep tasks current so the user can follow along in the panel and in \`omniloop task ls\`:
+
+- **Coordinator:** make every piece of work an \`omniloop task\` before it starts (\`--for me\`; \`--for you\` for a decision only the user can make; \`give N <agent>\` for a subagent's work), mark it \`omniloop task done N\` when it lands, and keep it current.
+- **Every agent:** keep your own todo list (the in-session one) updated while you work.
+
 ${contextBlock(manifest)}
 
 ${manifest.temp ? TEMP_MEMORY : memoryBlock(manifest)}## Tools

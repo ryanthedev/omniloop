@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { LABEL, COORDINATOR_KEYS, isCoordinatorLabeled, buildLoops, statusOf } from "../core/omniloop.js";
 import { initState, step, parseDuration, touchedByYou, sendFailed, hold, withoutReplies, adoptions, ADOPT_AFTER_MS, ADOPTED } from "../core/watch.js";
 import { validId, loopHome, newManifest, addDir, removeDir, dirsOn, launchDirsOn, worktreeChoice, worktreeTarget, worktreeBranch, setWorktree, overlaps, claudeMd, updateClaudeMd, agentArgv, parseAliasWords, sharedWith, LOOPS_DIR } from "../core/loopdir.js";
-import { bootstrapLoop, trustLoop } from "./lib/harness-apply.mjs";
+import { bootstrapLoop } from "./lib/harness-apply.mjs";
 import { matchProjects, addProject, removeProject, projectLaunch, withProjectsBlock } from "../core/projects.js";
 import { goalsOf, openGoals, setGoal, addGoal, finishGoal, editGoal, withGoalBlock, goalNote } from "../core/goals.js";
 import { feedEntry, feedLine, parseFeed, replyPlan, FEED_FILE } from "../core/feed.js";
@@ -117,7 +117,7 @@ async function writeClaudeMd(home, manifest, existing = null) {
 /** Harness config (core/harness.js) for a loop folder; a problem is one line, never a failure. */
 async function bootstrapHarnesses(home, manifest) {
   let lines;
-  try { lines = await bootstrapLoop(homedir(), home, manifest); } catch (e) { lines = [`failed (${String(e.message).split("\n")[0]})`]; }
+  try { lines = await bootstrapLoop(home, manifest); } catch (e) { lines = [`failed (${String(e.message).split("\n")[0]})`]; }
   if (lines.length) console.log(`  harness config: ${lines.join("; ")}`);
 }
 
@@ -476,7 +476,7 @@ async function cmdBootstrap({ flags, rest }) {
   if (!validId(id)) die("usage: omniloop bootstrap [<loop>]   (in a loop, <loop> defaults to it)");
   const m = await manifestOf(id);
   if (!m || m.id !== id) die(`no loop ${id} here`);
-  const lines = await bootstrapLoop(homedir(), loopHome(homedir(), id), m);
+  const lines = await bootstrapLoop(loopHome(homedir(), id), m);
   console.log(`bootstrapped ${id}${lines.length ? `: ${lines.join("; ")}` : " (already up to date)"}`);
 }
 
@@ -806,7 +806,7 @@ const BRIEF = `omniloop: you are in a loop (a piece of work with one coordinator
   omniloop task [ls | add "…" --for you|me|t3 | done N | give N t3 | edit N "…" | reopen N | rm N | move N <loop>]
   omniloop say "…" [--thread T]           post to the loop's chat feed (the user reads it there)
   omniloop add-dir <path> | rm-dir <path> add or remove a context folder of the loop (CLAUDE.md lists them)
-  omniloop bootstrap [<loop>]             (re)write the loop's harness config (Claude .claude/settings.json, Codex .codex + AGENTS.md)
+  omniloop bootstrap [<loop>]             (re)write the loop's harness config (.claude/settings.json; AGENTS.md linked to CLAUDE.md)
   omniloop shared                         other loops in this loop's folders, and their coordinators (tell them before a change)
   omniloop project ls | project add|rm <project>   reusable context (skills, tools, notes) for a kind of work
   omniloop rename [<old>] <new>           rename (move) a loop: folder, worktrees, branches, space, labels
@@ -935,8 +935,6 @@ async function cmdRename({ flags, rest }) {
   let md = await readFile(join(toHome, "CLAUDE.md"), "utf8").catch(() => null);
   if (md) { md = renameText(md, from, to); if (!next.temp) md = withFormerlyNote(md, from, new Date(now).toISOString().slice(0, 10)); }
   await writeClaudeMd(toHome, next, md);
-  const moved = await trustLoop(homedir(), fromHome, "move", toHome).catch(() => []);
-  if (moved.length) lines.push(`  ${moved.join("; ")}`);
   await bootstrapHarnesses(toHome, next);
   // Claude Code saves sessions by folder: move them along, and link the old one for sessions still running.
   const projects = join(homedir(), ".claude", "projects");
@@ -989,7 +987,6 @@ async function cmdRm({ flags, rest }) {
     if (t && job.terms.includes(t.to)) await rm(join(TIMERS, f), { force: true });
   }
   await rm(join(HOME, `state-${id}.json`), { force: true });
-  for (const p of new Set([loopHome(homedir(), id), home])) for (const l of await trustLoop(homedir(), p, "remove").catch(() => [])) lines.push(`  ${l}`);
   console.log(`${m.temp ? "temporary " : ""}loop ${id} deleted${purge ? ", with its transcripts and history" : ""}${sp ? "; its space closes now" : ""}.`);
   for (const l of lines) console.log(l);
   // The rest (stopping agents, closing the space, deleting the folder and transcripts) runs detached: when this runs

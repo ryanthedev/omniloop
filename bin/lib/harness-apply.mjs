@@ -1,51 +1,56 @@
-// harness-apply.mjs: write core/harness.js's files into a loop folder, and keep the user-global Codex trust entry.
-// `userHome` is injected (never read from the environment here), so tests use a temporary one.
-// Everything returns short lines for the command's output; nothing throws for a harness problem.
+// harness-apply.mjs: write core/harness.js's files into a loop folder.
+// Only files inside the loop folder are written, never through a symlink. Returns short lines for the command's
+// output; a problem with one file is a line about that file, never a throw.
 
-import { mkdir, readFile, writeFile, rename, rm, lstat, readlink, symlink, stat, chmod, realpath } from "node:fs/promises";
-import { join, dirname, basename, resolve } from "node:path";
-import { HARNESSES, harnessFiles } from "../../core/harness.js";
+import { mkdir, readFile, writeFile, rename, rm, lstat, readlink, symlink, stat, chmod } from "node:fs/promises";
+import { join, dirname, sep } from "node:path";
+import { randomBytes } from "node:crypto";
+import { harnessFiles } from "../../core/harness.js";
 
-const read = (p) => readFile(p, "utf8").catch(() => null);
-
-/** Where a write to `path` lands: through a symlink (say into a dotfiles repo) to its target, even a dangling one. */
-async function writeTarget(path) {
-  try { return await realpath(path); } catch {}
-  const st = await lstat(path).catch(() => null);
-  return st?.isSymbolicLink() ? resolve(dirname(path), await readlink(path)) : path;
+/** The file's text, or null when it doesn't exist. Any other error (no permission, not a folder) is thrown. */
+async function read(p) {
+  try { return await readFile(p, "utf8"); } catch (e) { if (e.code === "ENOENT") return null; throw e; }
 }
 
-/** Write temp file + rename, so a reader never sees half a file; keeps the old file's mode and writes through a link. */
+/** The first symlink on the way from `root` to `path` (each folder, then the file itself), or null. */
+async function linkOnPath(root, path) {
+  const parts = path.slice(root.length + 1).split(sep);
+  for (let i = 1; i <= parts.length; i++) {
+    const p = join(root, ...parts.slice(0, i));
+    if ((await lstat(p).catch(() => null))?.isSymbolicLink()) return p.slice(root.length + 1);
+  }
+  return null;
+}
+
+/** Write an unpredictably named temp file (exclusive create) and rename it over `path`; keeps the old file's mode. */
 export async function writeAtomic(path, text) {
-  const target = await writeTarget(path);
-  const mode = (await stat(target).catch(() => null))?.mode;
-  const tmp = `${target}.omniloop-${process.pid}.tmp`;
-  await writeFile(tmp, text);
-  if (mode != null) await chmod(tmp, mode & 0o777);
-  await rename(tmp, target);
+  const mode = (await stat(path).catch(() => null))?.mode;
+  const tmp = `${path}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    await writeFile(tmp, text, { flag: "wx" });
+    if (mode != null) await chmod(tmp, mode & 0o777);
+    await rename(tmp, path);
+  } catch (e) { await rm(tmp, { force: true }); throw e; }
 }
-
-// Codex keys trust by the real path (/private/tmp/x, never /tmp/x), so the entry must name it.
-const real = (p) => realpath(p).catch(() => realParent(p));
-/** The real path of p's folder plus p's own name: for a path that is gone or is now a link (the old name after a rename). */
-const realParent = async (p) => join(await realpath(dirname(p)).catch(() => dirname(p)), basename(p));
 
 /** Apply every harness's files in the loop folder `loopPath`. Returns lines (what was written, or why not). */
-export async function bootstrapLoop(userHome, loopPath, manifest) {
+export async function bootstrapLoop(loopPath, manifest) {
   const lines = [];
   for (const f of harnessFiles(manifest)) {
     const p = join(loopPath, f.path);
     try {
+      const via = await linkOnPath(loopPath, p);
       if (f.link) {
         const st = await lstat(p).catch(() => null);
-        if (st && !st.isSymbolicLink()) { lines.push(`${f.path} is a real file: left alone`); continue; }
-        if (st && (await readlink(p)) === f.link) continue;
-        if (st) await rm(p);
-        await symlink(f.link, p);
-        lines.push(`${f.path} -> ${f.link}`);
+        if (via && via !== f.path) lines.push(`${f.path}: ${via} is a symlink: left alone`);
+        else if (st && !st.isSymbolicLink()) lines.push(`${f.path} is a real file: left alone`);
+        else if (st) { const to = await readlink(p); if (to !== f.link) lines.push(`${f.path} is a link to ${to}, not ${f.link}: left alone`); }
+        else { await symlink(f.link, p); lines.push(`${f.path} -> ${f.link}`); }
         continue;
       }
-      const cur = await read(p);
+      if (via) { lines.push(`${f.path}: ${via} is a symlink: left alone`); continue; }
+      let cur;
+      try { cur = await read(p); } catch (e) { lines.push(`${f.path} can't be read (${e.code ?? e.message}): left alone`); continue; }
       const { text, note } = f.merge(cur);
       if (note) lines.push(note);
       if (text === cur) continue;
@@ -53,42 +58,6 @@ export async function bootstrapLoop(userHome, loopPath, manifest) {
       await writeAtomic(p, text);
       lines.push(`wrote ${f.path}`);
     } catch (e) { lines.push(`${f.harness}: ${f.path} failed (${String(e.message).split("\n")[0]})`); }
-  }
-  lines.push(...(await trustLoop(userHome, loopPath, "add")));
-  return lines;
-}
-
-/**
- * Edit the user-global config of each harness that needs the loop folder trusted. op: "add" | "remove" | "move"
- * (move: `to` is the new path, already renamed). Paths are resolved to real ones; remove also drops the path as
- * given, and move also moves an entry under the old name as given. A harness whose folder isn't in userHome (not
- * installed) is skipped silently.
- */
-export async function trustLoop(userHome, loopPath, op, to = null) {
-  const lines = [];
-  const uniq = async (...ps) => [...new Set(await Promise.all(ps))];
-  const dest = op === "move" ? await real(to) : null;
-  const steps =
-    op === "add" ? [await real(loopPath)].map((p) => (u, t) => u.add(t, p))
-    : op === "remove" ? (await uniq(loopPath, real(loopPath), realParent(loopPath))).map((p) => (u, t) => u.remove(t, p))
-    : (await uniq(realParent(loopPath), loopPath)).map((p) => (u, t) => u.move(t, p, dest));
-  for (const { user } of HARNESSES) {
-    if (!user) continue;
-    try {
-      if (!(await stat(join(userHome, user.requires)).catch(() => null))?.isDirectory()) continue;
-      const p = join(userHome, user.path);
-      const cur = await read(p);
-      if (cur == null && op !== "add") continue;
-      let text = cur ?? "";
-      for (const step of steps) {
-        const r = step(user, text);
-        if (r.note) lines.push(r.note);
-        text = r.text;
-      }
-      if (text === cur) continue;
-      await writeAtomic(p, text);
-      lines.push(`~/${user.path}: trust ${op === "move" ? `moved to ${dest}` : op === "add" ? "added" : "removed"}`);
-    } catch (e) { lines.push(`~/${user.path}: trust ${op} failed (${String(e.message).split("\n")[0]})`); }
   }
   return lines;
 }

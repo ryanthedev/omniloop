@@ -28,6 +28,9 @@ test("CLAUDE.md: the context block is rewritten, the rest is kept", () => {
   assert.match(md, /## How to work/);
   assert.match(md, /code-foundations:build-agent.*Sonnet/);
   assert.match(md, /code-foundations:post-gate-agent.*Opus/);
+  assert.match(md, /omniloop task done N/);
+  assert.match(md, /give N <agent>/);
+  assert.match(md, /todo list/);
   assert.match(md, /omniloop say "<text>"/);
   assert.match(md, /omniloop brief/);
   assert.doesNotMatch(md, /\b(lead|leads|helper|member|office)\b/i);
