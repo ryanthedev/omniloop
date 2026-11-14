@@ -7,8 +7,12 @@ import { addressOf } from "../core/turns.js";
 test("backendName: herdr by default; omni when OMNI_PANE is set and HC_TERMINAL_ID is not; OMNILOOP_BACKEND wins", () => {
   assert.equal(backendName({}), "herdr");
   assert.equal(backendName({ HC_TERMINAL_ID: "t1" }), "herdr");
-  assert.equal(backendName({ OMNI_PANE: "pn_A" }), "omni");
-  assert.equal(backendName({ OMNI_PANE: "pn_A", HC_TERMINAL_ID: "" }), "omni", "an empty HC_TERMINAL_ID is unset");
+  const up = () => true, down = () => false;
+  assert.equal(backendName({ OMNI_PANE: "pn_A" }, up), "omni");
+  assert.equal(backendName({ OMNI_PANE: "pn_A" }, down), "herdr", "a stale OMNI_PANE with no reachable daemon stays herdr");
+  assert.equal(backendName({ OMNI_PANE: "pn_A" }), "herdr", "no probe: never auto-select");
+  assert.equal(backendName({ OMNI_PANE: "pn_A", HC_TERMINAL_ID: "" }, up), "omni", "an empty HC_TERMINAL_ID is unset");
+  assert.equal(backendName({ OMNILOOP_BACKEND: "omni", OMNI_PANE: "pn_A" }, down), "omni", "explicit omni forces it");
   assert.equal(backendName({ OMNI_PANE: "pn_A", HC_TERMINAL_ID: "t1" }), "herdr", "both set: herdr, as before");
   assert.equal(backendName({ OMNILOOP_BACKEND: "omni" }), "omni");
   assert.equal(backendName({ OMNILOOP_BACKEND: "HERDR", OMNI_PANE: "pn_A" }), "herdr");
@@ -23,6 +27,8 @@ test("selfId: HC_TERMINAL_ID or OMNI_PANE, the named backend's first", () => {
   assert.equal(selfId({ HC_TERMINAL_ID: "t3", OMNI_PANE: "pn_X" }, "omni"), "pn_X");
   assert.equal(selfId({ HC_TERMINAL_ID: "t3" }, "omni"), "t3");
   assert.equal(selfId({ HC_TERMINAL_ID: "", OMNI_PANE: "" }), null);
+  assert.equal(selfId({ HC_TERMINAL_ID: "t3", OMNI_PANE: "pn_X", OMNILOOP_BACKEND: "omni" }), "pn_X", "a forced backend decides");
+  assert.equal(selfId({ HC_TERMINAL_ID: "t3", OMNI_PANE: "pn_X", OMNILOOP_BACKEND: "herdr" }), "t3");
 });
 
 test("turns.addressOf keys a session by OMNI_PANE too", () => {

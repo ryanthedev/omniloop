@@ -6,19 +6,21 @@ export const BACKENDS = ["herdr", "omni"];
 
 /**
  * Which backend: OMNILOOP_BACKEND=omni|herdr wins; otherwise omni when this process runs in an omni pane (OMNI_PANE set,
- * HC_TERMINAL_ID not), else herdr. An unknown OMNILOOP_BACKEND throws (a typo must not silently pick herdr).
+ * HC_TERMINAL_ID not) and omniReachable(env) says the daemon's socket is there, else herdr. An unknown OMNILOOP_BACKEND throws (a typo must not silently pick herdr).
  */
-export function backendName(env = {}) {
+export function backendName(env = {}, omniReachable = () => false) {
   const want = String(env.OMNILOOP_BACKEND ?? "").trim().toLowerCase();
   if (want) {
     if (!BACKENDS.includes(want)) throw new Error(`OMNILOOP_BACKEND=${env.OMNILOOP_BACKEND}: expected one of ${BACKENDS.join(", ")}`);
     return want;
   }
-  return env.OMNI_PANE && !env.HC_TERMINAL_ID ? "omni" : "herdr";
+  // A stale OMNI_PANE inherited on a herdr machine must not switch backends: auto-select omni only when its daemon is reachable.
+  return env.OMNI_PANE && !env.HC_TERMINAL_ID && omniReachable(env) ? "omni" : "herdr";
 }
 
 /** This process's own terminal id: HC_TERMINAL_ID (herdr) or OMNI_PANE (omni), the named backend's first. null outside a terminal. */
 export function selfId(env = {}, name = null) {
+  name ??= String(env.OMNILOOP_BACKEND ?? "").trim().toLowerCase() || null; // a forced backend decides when both ids are set
   const hc = env.HC_TERMINAL_ID || null, omni = env.OMNI_PANE || null;
   return (name === "omni" ? omni ?? hc : hc ?? omni) || null;
 }

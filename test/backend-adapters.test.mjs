@@ -2,7 +2,7 @@
 // JSON); HerdrBackend against a recording fake process transport. Nothing sleeps for real and nothing needs a live terminal.
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, realpathSync } from "node:fs";
+import { mkdtempSync, rmSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OmniBackend, HerdrBackend, selectBackend } from "../bin/lib/backend/index.mjs";
@@ -10,6 +10,8 @@ import { sendArgs } from "../bin/lib/backend/omni.mjs";
 import { nodeProc } from "../bin/lib/proc.mjs";
 import { foregroundPid } from "../bin/lib/sock.mjs";
 import { sendFailed } from "../core/watch.js";
+import { createServer } from "node:net";
+import { omniSocketReachable } from "../bin/lib/backend/index.mjs";
 import { fakeOmni } from "./helpers/fake-omni.mjs";
 import { FakeBackend } from "./helpers/fake-backend.mjs";
 
@@ -40,9 +42,10 @@ test("every backend implements the whole port (fake, herdr, omni)", () => {
 
 test("selectBackend picks the adapter from env", () => {
   assert.equal(selectBackend({}).name, "herdr");
-  assert.equal(selectBackend({ OMNI_PANE: "pn_A" }).name, "omni");
+  assert.equal(selectBackend({ OMNI_PANE: "pn_A" }, nodeProc, { omniReachable: () => true }).name, "omni");
+  assert.equal(selectBackend({ OMNI_PANE: "pn_A" }, nodeProc, { omniReachable: () => false }).name, "herdr");
   assert.equal(selectBackend({ OMNILOOP_BACKEND: "omni", HC_TERMINAL_ID: "t1" }).name, "omni");
-  assert.equal(selectBackend({ OMNI_PANE: "pn_A" }).self(), "pn_A");
+  assert.equal(selectBackend({ OMNILOOP_BACKEND: "omni", OMNI_PANE: "pn_A", HC_TERMINAL_ID: "t1" }).self(), "pn_A");
   assert.equal(selectBackend({ HC_TERMINAL_ID: "t4" }).self(), "t4");
 });
 
@@ -269,4 +272,28 @@ test("herdr: startCoordinator dry run names the herdr-app command; machines, kil
   assert.deepEqual(calls.slice(-3), [["hc", "kill", "t1"], ["hc", "rm", "t1"], ["hc", "events", "--json", "--label", "omniloop=X"]]);
   assert.equal(be.eventsReconnect, false);
   assert.equal(be.self(), "t9");
+});
+
+test("omniSocketReachable: true only for a socket named omni.sock in the runtime dir; a stale dir, a plain file or no dir is false", async () => {
+  const dir = scratch();
+  assert.equal(omniSocketReachable({ OMNI_RUNTIME_DIR: dir }), false);
+  writeFileSync(join(dir, "omni.sock"), "");
+  assert.equal(omniSocketReachable({ OMNI_RUNTIME_DIR: dir }), false, "a regular file is not a socket");
+  rmSync(join(dir, "omni.sock"));
+  const srv = createServer();
+  await new Promise((r) => srv.listen(join(dir, "omni.sock"), r));
+  try {
+    assert.equal(omniSocketReachable({ OMNI_RUNTIME_DIR: dir }), true);
+    assert.equal(selectBackend({ OMNI_PANE: "pn_A", OMNI_RUNTIME_DIR: dir }).name, "omni");
+  } finally { srv.close(); }
+  assert.equal(selectBackend({ OMNI_PANE: "pn_A", OMNI_RUNTIME_DIR: join(dir, "gone") }).name, "herdr");
+});
+
+test("omni: a capture that hangs is cut off, counts as no draft, and send still goes out", async () => {
+  const { be, fake } = omniRig({ hangVerbs: ["capture"] }, { draftWaitMs: 60_000 });
+  const t0 = Date.now();
+  const r = await be.send("pn_A", "note");
+  assert.equal(r.code, 0);
+  assert.ok(Date.now() - t0 < 8000, "took too long");
+  assert.equal(fake.calls().at(-1)[0], "send");
 });

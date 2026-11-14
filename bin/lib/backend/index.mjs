@@ -20,12 +20,21 @@
 //   startCoordinator(spec, {dry}) start a loop's coordinator: { address } or, dry, { plan }
 //   renameGroup(h, {to, terms}) / closeGroup(h) / retireGroup(h)   follow a loop rename / close its space / drop it once its panes are gone
 //   syncLoop(id, {goal, dirs}) / place(addr, loop|null, role)      mirror the loop into the backend / put a pane in it (herdr: nothing)
+import { statSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import { backendName } from "../../../core/backend.js";
 import { nodeProc } from "../proc.mjs";
 import { HerdrBackend } from "./herdr.mjs";
 import { OmniBackend } from "./omni.mjs";
 
-export function selectBackend(env = process.env, proc = nodeProc, opts = {}) {
-  return new (backendName(env) === "omni" ? OmniBackend : HerdrBackend)({ proc, env, ...opts });
+/** Is omni's daemon socket there, a socket owned by this user? One stat, no RPC (this runs on every hook). Mirrors omni_proto::runtime_dir. */
+export function omniSocketReachable(env = process.env) {
+  const dir = env.OMNI_RUNTIME_DIR || (env.XDG_RUNTIME_DIR ? join(env.XDG_RUNTIME_DIR, "omni") : join(env.TMPDIR || "/tmp", `omni-${process.getuid()}`));
+  try { const st = statSync(join(dir, "omni.sock")); return st.isSocket() && st.uid === process.getuid(); } catch { return false; }
+}
+
+export function selectBackend(env = process.env, proc = nodeProc, { omniReachable = omniSocketReachable, ...opts } = {}) {
+  return new (backendName(env, omniReachable) === "omni" ? OmniBackend : HerdrBackend)({ proc, env, ...opts });
 }
 export { HerdrBackend, OmniBackend };

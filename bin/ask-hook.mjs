@@ -8,16 +8,15 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { selectBackend } from "./lib/backend/index.mjs";
-import { selfId } from "../core/backend.js";
 import { addressOf, pidOf, foreign } from "../core/turns.js";
 import { asksUser, lastAssistantText, isHumanPrompt, isLoopTerminal } from "../core/ask.js";
 
 const quiet = () => process.exit(0);
 process.on("uncaughtException", quiet);
 try {
-  const id = selfId(process.env);
-  if (!id) quiet();
   const backend = selectBackend();
+  const id = backend.self();
+  if (!id) quiet();
   const input = JSON.parse(readFileSync(0, "utf8") || "{}");
   // A nested `claude` inherits HC_TERMINAL_ID: when another live session already owns this terminal, say nothing
   // (the same rule as session-hook.mjs; its records are under $OMNILOOP_HOME/sessions).

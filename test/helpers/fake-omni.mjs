@@ -16,7 +16,8 @@ const out = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
 const val = (f) => { const i = a.indexOf(f); return i < 0 ? null : a[i + 1]; };
 const verb = a[0] === "loop" ? "loop " + a[1] : a[0];
 if ((cfg.failVerbs || []).includes(verb)) { process.stderr.write("omni: denied (" + verb + ")\\n"); process.exit(cfg.failCode || 4); }
-if (a[0] === "ls") out({ terminals: cfg.terminals });
+if ((cfg.hangVerbs || []).includes(verb)) setInterval(() => {}, 1e6);
+else if (a[0] === "ls") out({ terminals: cfg.terminals });
 else if (a[0] === "get") { const t = cfg.terminals.find((x) => x.address === val("--pane")); if (t) out(t); else { process.stderr.write("omni: no such pane\\n"); process.exit(1); } }
 else if (a[0] === "capture") { const n = +(fs.existsSync(d + "/n") ? fs.readFileSync(d + "/n", "utf8") : 0); fs.writeFileSync(d + "/n", String(n + 1)); process.stdout.write((cfg.screens[Math.min(n, cfg.screens.length - 1)]) + "\\n"); }
 else if (a[0] === "send") { if (cfg.sendErr) process.stderr.write(cfg.sendErr); process.exit(cfg.sendExit || 0); }

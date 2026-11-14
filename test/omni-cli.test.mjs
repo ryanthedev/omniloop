@@ -182,3 +182,16 @@ test("omni: sessions finds claude panes from the one ls call", async (t) => {
   assert.match(stdout, /no Claude sessions running|address/);
   assert.equal(calledHerdr(r), "");
 });
+
+test("omni: the hooks use the selected backend's own pane id when both HC_TERMINAL_ID and OMNI_PANE are set", async (t) => {
+  const r = await rig(t, { terminals: [term("pn_X", { omniloop: "x", "omniloop.coordinator": "1" })] }, { HC_TERMINAL_ID: "t1", OMNI_PANE: "pn_X" });
+  const hook = join(dirname(BIN), "ask-hook.mjs");
+  await new Promise((res, rej) => {
+    const p = execFile("node", [hook], { env: r.env }, (e) => (e ? rej(e) : res()));
+    p.stdin.end(JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "s1", prompt: "hello" }));
+  });
+  const calls = r.fake.calls();
+  assert.deepEqual(calls[0], ["get", "--pane", "pn_X"]);
+  assert.equal(calls[1].slice(0, 3).join(" "), "label --pane pn_X");
+  assert.equal(calledHerdr(r), "");
+});

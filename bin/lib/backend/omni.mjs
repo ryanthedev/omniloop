@@ -6,6 +6,7 @@ import { failure } from "../proc.mjs";
 
 const LABEL_MAX = 2048;   // omni refuses a label value over 2048 bytes (5d report: Loop model)
 const GOAL_MAX = 2048;
+const CAPTURE_TIMEOUT_MS = 2000; // a hung capture counts as "no draft" so send() cannot hang
 const DRAFT_WAIT_MS = 60_000; // what hc send waits for a person's draft; omni send has none, so omniloop emulates it
 
 const kvOf = (item) => { const i = item.indexOf("="); return [item.slice(0, i), item.slice(i + 1)]; };
@@ -36,11 +37,11 @@ export class OmniBackend {
 
   async list() { return (await this.#omni(["ls", "--json"])).terminals ?? []; } // labels are included: one call
   get(address, { timeoutMs = 0 } = {}) { return this.#omni(["get", "--pane", address], { timeoutMs }); }
-  read(address) { return this.#omni(["capture", "--pane", address], { json: false }); }
+  read(address, { timeoutMs = 0 } = {}) { return this.#omni(["capture", "--pane", address], { json: false, timeoutMs }); }
 
   /** Type a note: wait (bounded) for a person's draft first, then paste + Enter. Resolves { code, output } for any exit (3 = the --if guard refused). */
   async send(address, text, { if: guard = null, timeoutMs = 180_000 } = {}) {
-    await waitForNoDraft({ read: () => this.read(address), sleep: this.sleep, now: this.now, maxMs: this.draftWaitMs });
+    await waitForNoDraft({ read: () => this.read(address, { timeoutMs: CAPTURE_TIMEOUT_MS }), sleep: this.sleep, now: this.now, maxMs: this.draftWaitMs });
     const r = await this.proc.run("omni", sendArgs(address, text, guard), { timeoutMs });
     return { code: r.code, output: `${r.stdout ?? ""}${r.stderr ?? ""}` };
   }

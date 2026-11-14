@@ -6,7 +6,6 @@
 //   Seen: ~/.cache/omniloop/goal-seen/<session id> holds "<loop>:<goal rev>".
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { selectBackend } from "./lib/backend/index.mjs";
-import { selfId } from "../core/backend.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -17,9 +16,10 @@ try {
   const sid = String(input.session_id ?? "").replace(/[^A-Za-z0-9_-]/g, "");
   if (!sid) quiet();
   let loop = null;
-  if (selfId(process.env)) {
+  const backend = selectBackend(), self = backend.self();
+  if (self) {
     try {
-      const t = await selectBackend().get(selfId(process.env), { timeoutMs: 2000 });
+      const t = await backend.get(self, { timeoutMs: 2000 });
       loop = t?.labels?.omniloop || null;
     } catch {}
   }
