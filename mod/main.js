@@ -1,4 +1,4 @@
-// Omniloop: your work as loops, not spaces. Each loop shows its lead (or "you"), its goal and its members as a
+// Omniloop: your work as loops, not spaces. Each loop shows its coordinator (or "you"), its goal and its agents as a
 // tree; a chip marks what's for you. Data comes live from terminals() (labels) plus the watcher's small state
 // file (~/.cache/omniloop/state.json); this mod runs no hc commands, so it stays cheap in the shared engine.
 // Rules: core/omniloop.js; what's drawn: core/view.js. Each loop's goal is read from its folder
@@ -6,7 +6,7 @@
 // (tasks.json) follow: yours as a checklist (click to finish), then each agent's.
 //
 // Chat: one local loop's feed (~/loops/<id>/feed.jsonl) is docked at the bottom as a chat; Enter in its box runs
-// `omniloop reply` (posts as you, delivers to the loop's lead or holds it for the watcher). The pane runs no hc.
+// `omniloop reply` (posts as you, delivers to the loop's coordinator or holds it for the watcher). The pane runs no hc.
 //
 // Sound: off by default, because the app's own blocked sound still plays for every agent. Turn this on
 // (click "sound") once settings.json sounds.blocked is off: then only alerts for you make a sound.
@@ -39,7 +39,7 @@ export default class Omniloop extends View {
     this.handle = cx.focus_handle();
     // Test hook: a test home's shared.json {"omniloop.test": {"help": true}} opens it at start.
     if (shared("omniloop.test")?.help) this.keysHelp.open(cx);
-    // When you were last in each loop member's terminal (ms), kept across restarts.
+    // When you were last in each loop agent's terminal (ms), kept across restarts.
     try { this.withYou = JSON.parse(localStorage.getItem("withYou") ?? "{}"); } catch { this.withYou = {}; }
     setShared("omniloop.withYou", this.withYou);
     // Chat. chatPick: the loop you chose (null: the top-ranked local loop); chatId: the one shown now.
@@ -144,7 +144,7 @@ export default class Omniloop extends View {
     });
   }
 
-  // Being in a loop member's terminal counts as interacting with it; refreshed on every render (at least every 15 s).
+  // Being in a loop agent's terminal counts as interacting with it; refreshed on every render (at least every 15 s).
   trackFocus(all) {
     const f = focused()?.terminal;
     if (!f) return;
@@ -183,7 +183,7 @@ export default class Omniloop extends View {
       .cursor_pointer().hover((s) => s.bg(t.hover))
       .on_click(() => run("pane.focus", { terminal: r.address }))
       .child(this.dot(t, r.status))
-      .child(div().flex_1().truncate().text_color(r.forYou ? t.foreground : t.muted).child(`${r.isLead ? "★ " : ""}${r.name}`))
+      .child(div().flex_1().truncate().text_color(r.forYou ? t.foreground : t.muted).child(`${r.isCoordinator ? "★ " : ""}${r.name}`))
       .when(Boolean(r.kind), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(r.kind)))
       .when(r.reportsToYou, (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(r.ago ? `you ${r.ago}` : "you: never")))
       .when(Boolean(r.forYou), (el) => el.child(this.chip(t, r.forYouLabel ?? r.forYou, t.blocked)));
@@ -205,9 +205,9 @@ export default class Omniloop extends View {
       .child(div().flex_none().text_size(10.5).text_color(l.ago ? t.muted : t.dim).child(l.ago ? `you ${l.ago}` : "you: never"))
       .when(l.needsYou > 0, (el) => el.child(this.chip(t, l.forYouLabel || `${l.needsYou} for you`, t.blocked)))
       .when(l.handling > 0, (el) => el.child(this.chip(t, `${l.handling} handled in loop`, t.working)))
-      .when(!l.lead, (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child("you lead")));
+      .when(!l.coordinator, (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child("you coordinate")));
     const warn = l.warnings.length ? div().px(22).text_size(10.5).text_color(t.blocked).child(l.warnings.join("; ")) : null;
-    // The goal, big and whole: loop.json first, else the members' label; a loop without one says so.
+    // The goal, big and whole: loop.json first, else the agents' label; a loop without one says so.
     const [cur, ...more] = this.goals[l.id] ?? (l.goal ? [{ n: 0, text: l.goal }] : []);
     const goal = v_flex().flex_none().pl(25).pr(10).pb(6).gap(3)
       .child(cur
@@ -304,7 +304,7 @@ export default class Omniloop extends View {
 
     const body = v.loops.length
       ? v.loops.map((l) => this.loop(t, l))
-      : [div().p(14).text_size(12).text_color(t.muted).child("No loops yet. In an agent: omniloop join <loop> --lead")];
+      : [div().p(14).text_size(12).text_color(t.muted).child("No loops yet. In an agent: omniloop join <loop> --coordinator")];
 
     const help = this.keysHelp.panel();
     return v_flex().id("omniloop").relative().size_full().bg(t.background)

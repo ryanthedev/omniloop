@@ -1,7 +1,7 @@
 // panel.js: the docked Omniloop panel, as plain data. Pure.
 //
 // Two views, switched with 1 / 2 or Tab:
-//   loop  the current loop: its goal(s), your todo (your tasks; x or space finishes one), the agents' tasks, its members, its context
+//   loop  the current loop: its goal(s), your todo (your tasks; x or space finishes one), the agents' tasks, its agents, its context
 //         (folders and projects). "Current" is the loop you picked in the list, else the loop of the last
 //         terminal you were in, else the top of the list.
 //   all   every loop: the ones on disk (~/loops/<id>/loop.json, via bin/panel-loops.mjs) joined with the live ones
@@ -63,8 +63,8 @@ export function allLoops(disk = [], live = []) {
   const out = [...byId.values()].map(({ id, disk: d, live: l }) => ({
     id,
     goal: d?.goals?.[0]?.text ?? l?.goal ?? "",
-    lead: l?.lead ?? null,
-    members: l?.rows?.length ?? 0,
+    coordinator: l?.coordinator ?? null,
+    agents: l?.rows?.length ?? 0,
     needsYou: l?.needsYou ?? 0,
     // What waits on you, in words ("1 needs approval · 2 asked you"); a count where the view has no words yet.
     forYou: l?.forYouLabel || (l?.needsYou ? `${l.needsYou} for you` : ""),
@@ -75,7 +75,7 @@ export function allLoops(disk = [], live = []) {
     touched: d?.touched ?? 0,
     live: Boolean(l),
     local: Boolean(d),
-    temp: d?.temp === true, // a temporary loop: deleted once its last member exits
+    temp: d?.temp === true, // a temporary loop: deleted once its last agent exits
   }));
   // Needs you first, then the ones you were in most recently, then the most recently changed on disk.
   out.sort((a, b) => b.needsYou - a.needsYou || (b.lastWithYou ?? -1) - (a.lastWithYou ?? -1) || b.live - a.live
@@ -110,7 +110,7 @@ export function currentLoop(state, loops, focusedLoop) {
 
 /**
  * Rows for one loop. Each row: { kind, text, ... , pick? } where pick marks rows the cursor can stop on.
- * Kinds: head (section title), goal, todo (yours: Enter finishes), task (an agent's), member (Enter jumps),
+ * Kinds: head (section title), goal, todo (yours: Enter finishes), task (an agent's), agent (Enter jumps),
  * dir, project, empty.
  */
 export function loopRows(id, disk, live, open = {}) {
@@ -133,11 +133,11 @@ export function loopRows(id, disk, live, open = {}) {
     for (const a of agents) for (const t of a.tasks) rows.push({ kind: "task", owner: a.owner, text: t.text, n: t.n, pick: true, terminal: a.owner });
   }
 
-  const members = live?.rows ?? [];
-  head(`MEMBERS${members.length ? ` (${members.length})` : ""}`);
-  if (!members.length) rows.push({ kind: "empty", text: "No live terminals in this loop." });
-  for (const m of members) rows.push({ kind: "member", text: m.name, address: m.address, depth: m.depth, status: m.status,
-    isLead: m.isLead, forYou: m.forYouLabel ?? m.forYou, ago: m.ago, terminal: m.address, pick: true });
+  const sessions = live?.rows ?? [];
+  head(`AGENTS${sessions.length ? ` (${sessions.length})` : ""}`);
+  if (!sessions.length) rows.push({ kind: "empty", text: "No live terminals in this loop." });
+  for (const m of sessions) rows.push({ kind: "agent", text: m.name, address: m.address, depth: m.depth, status: m.status,
+    isCoordinator: m.isCoordinator, forYou: m.forYouLabel ?? m.forYou, ago: m.ago, terminal: m.address, pick: true });
 
   const dirs = disk?.dirs ?? [], projects = disk?.projects ?? [];
   rows.push({ kind: "head", text: "CONTEXT", hint: disk ? "a add folder · p add project" : "" });
@@ -251,9 +251,9 @@ export function step(state, key, rows) {
     case "escape":
       if (s.query) return { state: { ...s, query: "" } };
       return { state: s, action: { type: "leave" } };
-    case "o": { // jump to the lead of the loop under the cursor (all) or the current loop (loop)
-      const lead = v === "all" ? row?.loop?.lead : null;
-      return { state: s, action: { type: "lead", loop: v === "all" ? row?.loop?.id ?? null : null, terminal: lead } };
+    case "o": { // jump to the coordinator of the loop under the cursor (all) or the current loop (loop)
+      const coordinator = v === "all" ? row?.loop?.coordinator : null;
+      return { state: s, action: { type: "coordinator", loop: v === "all" ? row?.loop?.id ?? null : null, terminal: coordinator } };
     }
     case "a": case "p": // add a folder or a project to the loop shown (captured now, so a reload can't move it)
       if (v !== "loop" || !state.addable) return { state: s };

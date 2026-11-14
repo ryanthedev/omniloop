@@ -5,11 +5,11 @@ node, plus the Herdr app for the view. The rules are in `SPEC.md`.
 
 | Path | What |
 |---|---|
-| `core/omniloop.js` | who leads a loop and who hears about each member (pure) |
+| `core/omniloop.js` | who coordinates a loop and who hears about each agent (pure) |
 | `core/watch.js` | the watcher's step: notes, batching, stalls, timers, escalation (pure) |
 | `core/view.js` | what the pane shows (pure) |
 | `bin/omniloop.mjs` | CLI for agents and the watcher process |
-| `core/projects.js` | projects: matching a request to projects, and what a project adds to a member's launch (pure) |
+| `core/projects.js` | projects: matching a request to projects, and what a project adds to an agent's launch (pure) |
 | `projects/<name>/` | projects shipped with omniloop; your own go in `~/loops/projects/<name>/` and win on a name clash |
 | `mod/` | the Herdr pane; `scripts/install.sh` copies it with `core/` into `$HERDR_APP_HOME/mods/omniloop` |
 
@@ -19,14 +19,14 @@ need to run it.
 ## CLI
 
 ```sh
-omniloop ls [loop]                           # the loop as a tree; * = lead
-omniloop join <loop> --lead --goal "…"       # make this terminal a loop's lead
-omniloop start <loop> --job J -- claude "…"  # start a helper that reports to you (a tab in your space)
+omniloop ls [loop]                           # the loop as a tree; * = coordinator
+omniloop join <loop> --coordinator --goal "…"  # make this terminal a loop's coordinator (--lead still works)
+omniloop start <loop> --job J -- claude "…"  # start a subagent that reports to you (a tab in your space)
 omniloop timer 20m "check the build"         # a note later, once you stop working
 omniloop needs-you [off]                     # this block is the user's
 omniloop handoff <file>                      # restart yourself fresh from a hand-off file
 omniloop watch [--loop id] [--dry-run]       # the watcher (one per machine)
-omniloop brief                               # the ~900-character brief every member reads at start
+omniloop brief                               # the ~900-character brief every agent reads at start
 omniloop new <id> --goal "…" --project study    # a loop with a project (repeat --project for more); a goal is required
 omniloop goal [set "…" | add "…" | done N]   the loop's goal; there is always one
 omniloop project ls [--json]                    # the projects omniloop can find
@@ -42,8 +42,8 @@ one, `goal done N` closes one, never the last. `new` refuses a loop without one.
 
 - **You see it:** as a paragraph under each loop's name in the Omniloop pane.
 - **Agents get it:** at start from the loop's CLAUDE.md (between `<!-- omniloop:goal -->` markers). On a change,
-  members started by omniloop load `plugin/` (a Claude Code plugin), whose hooks (`bin/goal-hook.mjs`; `bin/ask-hook.mjs` labels what you asked and when you typed) adds one
-  line to their next prompt, and again after a compact or resume; an unchanged goal adds nothing. Members started
+  agents started by omniloop load `plugin/` (a Claude Code plugin), whose hooks (`bin/goal-hook.mjs`; `bin/ask-hook.mjs` labels what you asked and when you typed) adds one
+  line to their next prompt, and again after a compact or resume; an unchanged goal adds nothing. Agents started
   some other way get the line typed in, if they're waiting.
 
 ## Tasks
@@ -61,9 +61,9 @@ Everything can be renamed, edited or deleted from the CLI, so you can just tell 
 
 | Command | What it does |
 |---|---|
-| `omniloop rename [<old>] <new>` | Rename (move) a loop. Its folder moves to `~/loops/<new>`, and the old name stays as a link so running members keep working. Its worktrees follow (`git worktree repair`), with their branch renamed `<new>/work`. It relabels members, renames the space, moves the Claude project folder, and records `formerly` in `loop.json` plus a CLAUDE.md line, so Engram notes under the old name stay findable. |
-| `omniloop rm [<loop>] [--force] [--purge]` | Delete a loop: its folder and worktrees, never its context folders. It refuses on uncommitted files or unmerged commits; `--force` drops the files and still keeps an unmerged branch. A merged branch is deleted. It also refuses on running members when you aren't one of them; `--force` stops them. The space closes last, from a detached process, so it works from inside the loop. `--purge` also deletes the loop's Claude transcripts, scratchpads, its lines in `~/.claude/history.jsonl` and omniloop's records of its terminals. |
-| `omniloop new --temp [--goal "…"]` | A temporary loop (`"temp": true` in `loop.json`; the id defaults to `tmp-<time>`). Members start without `ENGRAM_TOKEN`/`ENGRAM_ADDR`, with Engram's write tools disallowed, and CLAUDE.md tells them to keep no memory. It ends on `omniloop rm` (always purged), or by itself: the watcher deletes it once its last member is gone (2 min grace), or after a day with no members. Unmerged work keeps it alive. Checked in a real session: a member's Bash has no Engram credentials and `engram` can't connect. Not scrubbed: a watcher's own log (`watch.log`, if you redirect it) can hold note text. |
+| `omniloop rename [<old>] <new>` | Rename (move) a loop. Its folder moves to `~/loops/<new>`, and the old name stays as a link so running agents keep working. Its worktrees follow (`git worktree repair`), with their branch renamed `<new>/work`. It relabels agents, renames the space, moves the Claude project folder, and records `formerly` in `loop.json` plus a CLAUDE.md line, so Engram notes under the old name stay findable. |
+| `omniloop rm [<loop>] [--force] [--purge]` | Delete a loop: its folder and worktrees, never its context folders. It refuses on uncommitted files or unmerged commits; `--force` drops the files and still keeps an unmerged branch. A merged branch is deleted. It also refuses on running agents when you aren't one of them; `--force` stops them. The space closes last, from a detached process, so it works from inside the loop. `--purge` also deletes the loop's Claude transcripts, scratchpads, its lines in `~/.claude/history.jsonl` and omniloop's records of its terminals. |
+| `omniloop new --temp [--goal "…"]` | A temporary loop (`"temp": true` in `loop.json`; the id defaults to `tmp-<time>`). Agents start without `ENGRAM_TOKEN`/`ENGRAM_ADDR`, with Engram's write tools disallowed, and CLAUDE.md tells them to keep no memory. It ends on `omniloop rm` (always purged), or by itself: the watcher deletes it once its last agent is gone (2 min grace), or after a day with no agents. Unmerged work keeps it alive. Checked in a real session: an agent's Bash has no Engram credentials and `engram` can't connect. Not scrubbed: a watcher's own log (`watch.log`, if you redirect it) can hold note text. |
 | `omniloop task edit N "…"` / `reopen N` / `rm N` / `move N <loop>` | Reword, reopen, delete or move a task. |
 | `omniloop goal edit N "…"` | Reword an open goal. |
 | `omniloop rm-dir <path>` / `project rm <name>` | Take a context folder (and its worktree) or a project out of a loop. |
@@ -72,9 +72,9 @@ Everything can be renamed, edited or deleted from the CLI, so you can just tell 
 
 A project is reusable context for a kind of work: a folder with `project.json` (name, description, trigger words and
 URLs, repos), `CONTEXT.md` (copied into each loop's CLAUDE.md, between `<!-- omniloop:projects -->` markers), and
-`.claude-plugin/` plus `skills/` so members load it with `--plugin-dir`. A loop lists its projects in `loop.json`.
+`.claude-plugin/` plus `skills/` so agents load it with `--plugin-dir`. A loop lists its projects in `loop.json`.
 The picker (⌘O) pre-ticks projects whose triggers appear in what you typed; a loop made with projects and a goal
-starts its lead on the goal instead of asking.
+starts its coordinator on the goal instead of asking.
 
 - **study:** reels, videos and podcasts into a slide deck and a randomized practice test, published on upublish,
   with a root page listing every kit. Its test engine (`kit/`) is shared; each kit writes only its slides and

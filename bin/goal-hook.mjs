@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Claude Code hook (SessionStart, UserPromptSubmit) for loop members: when the loop's goal changed since this
+// Claude Code hook (SessionStart, UserPromptSubmit) for loop agents: when the loop's goal changed since this
 // session last saw it, print one line, which Claude Code adds to the agent's context. Otherwise print nothing,
 // so an unchanged goal costs no tokens. Never blocks: every failure exits 0 silently.
 //   Which loop: the terminal's omniloop label (HC_TERMINAL_ID), else a loop.json in the session's folder.

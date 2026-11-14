@@ -125,9 +125,9 @@ export function newLoopCommand({ machine = null, id, goal, projects = [], dirs =
   return { cmd: hc, args: ["exec", "--on", machine, "--", "/bin/zsh", "-lc", 'exec omniloop "$@"', "omniloop", ...args] };
 }
 
-/** The lead's terminal from `omniloop new`'s output ("lead t7 in space x"), as an address seen from here. */
-export function leadAddress(stdout, machine = null) {
-  const m = String(stdout ?? "").match(/^lead (\S+) in space /m);
+/** The coordinator's terminal from `omniloop new`'s output ("coordinator t7 in space x"; "lead t7 in space x" from before the rename), as an address seen from here. */
+export function coordinatorAddress(stdout, machine = null) {
+  const m = String(stdout ?? "").match(/^(?:coordinator|lead) (\S+) in space /m);
   if (!m) return null;
   return machine ? `${machine}/${m[1]}` : m[1];
 }
@@ -144,7 +144,7 @@ const baseName = (p) => String(p ?? "").split("/").filter(Boolean).pop() ?? "";
  * One entry per loop, from the loops with sessions (buildView(...).loops, keyed by loopKey: "<id>" or "<machine>/<id>")
  * and this computer's loop folders (`omniloop index --json`: [{ id, goal, dirs, projects, tasks, feed, touched }]),
  * so a loop with nobody running still shows and can be searched. Entry:
- * { key, id, machine, goal, lead, needsYou, status, ago, lastWithYou, touched, running, members, dirs, projects, tasks, feed, pin }
+ * { key, id, machine, goal, coordinator, needsYou, status, ago, lastWithYou, touched, running, agents, dirs, projects, tasks, feed, pin }
  * `indexLoaded`: the index has been read. Until then (or if reading failed) a pinned local loop with nobody running
  * can't be told from a removed one, so it is a quiet placeholder (`placeholder: "loading" | "unreadable"`), never
  * `stale`; `stale` (a pin to drop) is only for a local key once the index is in, or a remote key at any time.
@@ -156,16 +156,16 @@ export function loopEntries(viewLoops = [], index = [], pins = [], local = LOCAL
     const i = l.id.indexOf("/");
     const machine = i < 0 ? null : l.id.slice(0, i);
     const disk = machine ? null : byId.get(l.id);
-    out.push({ key: l.id, where: machine ?? local, id: machine ? l.id.slice(i + 1) : l.id, machine, goal: l.goal ?? disk?.goal ?? "", lead: l.lead ?? l.rows?.[0]?.address ?? null,
+    out.push({ key: l.id, where: machine ?? local, id: machine ? l.id.slice(i + 1) : l.id, machine, goal: l.goal ?? disk?.goal ?? "", coordinator: l.coordinator ?? l.lead ?? l.rows?.[0]?.address ?? null, // l.lead: a view from before the rename
       needsYou: l.needsYou ?? 0, forYouLabel: l.forYouLabel ?? (l.needsYou ? `${l.needsYou} for you` : ""), status: l.status ?? null, ago: l.ago ?? null, lastWithYou: l.lastWithYou ?? null, touched: disk?.touched ?? null,
-      running: true, members: (l.rows ?? []).map((r) => r.name).filter(Boolean), dirs: disk?.dirs ?? [], projects: disk?.projects ?? [],
+      running: true, agents: (l.rows ?? []).map((r) => r.name).filter(Boolean), dirs: disk?.dirs ?? [], projects: disk?.projects ?? [],
       tasks: disk?.tasks ?? [], feed: disk?.feed ?? [], pin: slotOf(pins, l.id) });
   }
   const seen = new Set(out.map((e) => e.key));
   for (const x of index) {
     if (seen.has(x.id)) continue;
-    out.push({ key: x.id, where: local, id: x.id, machine: null, goal: x.goal ?? "", lead: null, needsYou: 0, forYouLabel: "", status: null, ago: null, lastWithYou: null,
-      touched: x.touched ?? null, running: false, members: [], dirs: x.dirs ?? [], projects: x.projects ?? [], tasks: x.tasks ?? [], feed: x.feed ?? [],
+    out.push({ key: x.id, where: local, id: x.id, machine: null, goal: x.goal ?? "", coordinator: null, needsYou: 0, forYouLabel: "", status: null, ago: null, lastWithYou: null,
+      touched: x.touched ?? null, running: false, agents: [], dirs: x.dirs ?? [], projects: x.projects ?? [], tasks: x.tasks ?? [], feed: x.feed ?? [],
       pin: slotOf(pins, x.id) });
     seen.add(x.id);
   }
@@ -176,20 +176,20 @@ export function loopEntries(viewLoops = [], index = [], pins = [], local = LOCAL
     const i = key.indexOf("/");
     const machine = i < 0 ? null : key.slice(0, i);
     const unknown = !machine && !indexLoaded;
-    out.push({ key, where: machine ?? local, id: machine ? key.slice(i + 1) : key, machine, goal: "", lead: null, needsYou: 0, forYouLabel: "", status: null, ago: null,
+    out.push({ key, where: machine ?? local, id: machine ? key.slice(i + 1) : key, machine, goal: "", coordinator: null, needsYou: 0, forYouLabel: "", status: null, ago: null,
       lastWithYou: null, touched: null, running: false, ...(unknown ? { placeholder: indexFailed ? "unreadable" : "loading" } : { stale: true }),
-      members: [], dirs: [], projects: [], tasks: [], feed: [], pin: slot });
+      agents: [], dirs: [], projects: [], tasks: [], feed: [], pin: slot });
   }
   return out;
 }
 
-const FIELD_LABEL = { member: "session", folder: "folder", project: "project", task: "task", chat: "chat" };
+const FIELD_LABEL = { agent: "session", folder: "folder", project: "project", task: "task", chat: "chat" };
 
 /** How an entry matches a query: { score, why } or null. `why` is one short line, only when the hit isn't in the id or goal. */
 export function entryMatch(e, query) {
   const m = fuzzyFields(query, [
     { name: "id", text: e.id, weight: 3 }, { name: "machine", text: e.where ?? e.machine ?? "", weight: 1.2 }, { name: "goal", text: e.goal, weight: 2, long: true },
-    { name: "member", text: e.members, weight: 1.2 }, { name: "folder", text: e.dirs.map(baseName), weight: 1.5 },
+    { name: "agent", text: e.agents, weight: 1.2 }, { name: "folder", text: e.dirs.map(baseName), weight: 1.5 },
     { name: "project", text: e.projects, weight: 1.5 }, { name: "task", text: e.tasks, long: true }, { name: "chat", text: e.feed, weight: 0.8, long: true },
   ]);
   if (!m) return null;
@@ -269,7 +269,7 @@ export function screenLines(stdout, n = 14) {
   return lines.slice(-n);
 }
 
-/** The preview's screen heading: "LEAD'S SCREEN" only for a loop whose view has a real lead (its `.lead` terminal), else "SCREEN · <address>". */
-export function screenLabel(hasLead, address) {
-  return hasLead ? "LEAD'S SCREEN" : `SCREEN · ${address}`;
+/** The preview's screen heading: "COORDINATOR'S SCREEN" only for a loop whose view has a real coordinator (its `.coordinator` terminal), else "SCREEN · <address>". */
+export function screenLabel(hasCoordinator, address) {
+  return hasCoordinator ? "COORDINATOR'S SCREEN" : `SCREEN · ${address}`;
 }

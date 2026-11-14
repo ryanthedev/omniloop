@@ -2,20 +2,22 @@
 // Omniloop stands alone: it needs only herdr-core (`hc`) and, for the view, the Herdr app.
 // install.sh copies this file into the mod (a Herdr mod can't import from outside its folder).
 //
-// An omniloop is one piece of work you're doing. It is not a space: its members can sit in any
+// An omniloop is one piece of work you're doing. It is not a space: its agents can sit in any
 // space on any machine. Everything is read from herdr-core terminal labels (see SPEC.md):
 //
 //   omniloop=<id>          this terminal works on loop <id>
-//   omniloop.lead=1        this agent leads the loop (no lead in a loop: you lead it)
-//   omniloop.goal=<text>   what the loop is for (read from the lead first, then any member)
-//   omniloop.to=<terminal> who this member's blocks and results go to (its parent in the loop)
-//   omniloop.notify=me     this member may reach you directly
+//   omniloop.coordinator=1 this agent coordinates the loop (no coordinator in a loop: you coordinate it).
+//                          Written together with the old key omniloop.lead=1, which is still read: a terminal
+//                          labelled by an older version stays recognised.
+//   omniloop.goal=<text>   what the loop is for (read from the coordinator first, then any agent)
+//   omniloop.to=<terminal> who this agent's blocks and results go to (its parent in the loop)
+//   omniloop.notify=me     this agent may reach you directly
 //   omniloop.needs=you     set by the agent itself: this block is yours (credentials, spending, public)
 //   omniloop.retired=<t>   handed off to <t> (omniloop handoff); out of the loop
 
 export const LABEL = {
   loop: "omniloop",
-  lead: "omniloop.lead",
+  coordinator: "omniloop.coordinator",
   goal: "omniloop.goal",
   notify: "omniloop.notify",
   needs: "omniloop.needs",
@@ -24,6 +26,14 @@ export const LABEL = {
   ask: "omniloop.ask",
   you: "omniloop.you",
 };
+
+/** The coordinator label's old key (before the rename); still read, and written next to the new one. */
+export const LEGACY_COORDINATOR_LABEL = "omniloop.lead";
+/** Every key that marks a coordinator, new first. Set all of them, clear all of them. */
+export const COORDINATOR_KEYS = [LABEL.coordinator, LEGACY_COORDINATOR_LABEL];
+
+/** Does this label map mark a coordinator (new or old key)? */
+export const isCoordinatorLabeled = (labels) => COORDINATOR_KEYS.some((k) => isOn(labels?.[k]));
 
 /** Blocks a parent agent can't clear (it can't approve a prompt in another terminal): they go to you. */
 export const YOURS_KINDS = new Set(["permission", "auth"]);
@@ -84,10 +94,10 @@ function isOn(value) {
 /**
  * terminals: [{address, labels, status, created_ms?, space?, machine?, title?}]
  * Returns { loops: [Loop], loose: [terminal] } where loose terminals belong to no loop.
- * Loop: { id (loopKey: "x" here, "m1/x" on machine m1), name (the label's id), machine (null = here), goal, lead (address or null = you), leads (all lead-labelled), warnings,
- *         members: [Member], roots: [address] }
- * Retired or finished members are left out (loop.retired lists them); so are finished loose ones.
- * Member: { address, status, parent (qualified address or null), parentOutside, children, isLead,
+ * Loop: { id (loopKey: "x" here, "m1/x" on machine m1), name (the label's id), machine (null = here), goal, coordinator (address or null = you), coordinators (all coordinator-labelled), warnings,
+ *         agents: [Agent], roots: [address] }
+ * Retired or finished agents are left out (loop.retired lists them); so are finished loose ones.
+ * Agent: { address, status, parent (qualified address or null), parentOutside, children, isCoordinator,
  *           notifyMe, needsYou, terminal }
  */
 export function buildLoops(terminals) {
@@ -98,7 +108,7 @@ export function buildLoops(terminals) {
     const t = { ...raw, status: statusOf(raw), kind: kindOf(raw), labels: raw.labels ?? {} };
     const id = loopKey(t);
     if (!id) { if (!isGone(t)) loose.push(t); continue; }
-    // A handed-off lead's successor carries every label, lead included; the retired one drops out.
+    // A handed-off coordinator's successor carries every label, coordinator included; the retired one drops out.
     if (isGone(t)) { if (!gone.has(id)) gone.set(id, []); gone.get(id).push(t.address); continue; }
     if (!byId.has(id)) byId.set(id, []);
     byId.get(id).push(t);
@@ -107,15 +117,15 @@ export function buildLoops(terminals) {
   const loops = [];
   for (const [id, ts] of byId) {
     const warnings = [];
-    const leads = ts
-      .filter((t) => isOn(t.labels[LABEL.lead]))
+    const coordinators = ts
+      .filter((t) => isCoordinatorLabeled(t.labels))
       .sort((a, b) => (a.created_ms ?? 0) - (b.created_ms ?? 0))
       .map((t) => t.address);
-    if (leads.length > 1) warnings.push(`${leads.length} leads; the oldest (${leads[0]}) leads`);
-    const lead = leads[0] ?? null;
+    if (coordinators.length > 1) warnings.push(`${coordinators.length} coordinators; the oldest (${coordinators[0]}) coordinates`);
+    const coordinator = coordinators[0] ?? null;
 
     const addresses = new Set(ts.map((t) => t.address));
-    const members = ts.map((t) => {
+    const agents = ts.map((t) => {
       const parent = qualify(t.labels[LABEL.reportsTo], t.address);
       return {
         address: t.address,
@@ -124,18 +134,18 @@ export function buildLoops(terminals) {
         parent: parent && addresses.has(parent) && parent !== t.address ? parent : null,
         parentOutside: Boolean(parent && !addresses.has(parent)),
         children: [],
-        isLead: t.address === lead,
+        isCoordinator: t.address === coordinator,
         notifyMe: t.labels[LABEL.notify] === "me",
         needsYou: t.labels[LABEL.needs] === "you",
         terminal: t,
       };
     });
-    // Who reports to you: the lead, everyone in a loop you lead, and members set to reach you.
-    for (const m of members) m.reportsToYou = m.isLead || !lead || m.notifyMe;
-    const byAddr = new Map(members.map((m) => [m.address, m]));
+    // Who reports to you: the coordinator, everyone in a loop you coordinate, and agents set to reach you.
+    for (const m of agents) m.reportsToYou = m.isCoordinator || !coordinator || m.notifyMe;
+    const byAddr = new Map(agents.map((m) => [m.address, m]));
 
-    // Break reports-to cycles: walk up from each member; a repeat cuts the link that closed it.
-    for (const m of members) {
+    // Break reports-to cycles: walk up from each agent; a repeat cuts the link that closed it.
+    for (const m of agents) {
       const seen = new Set([m.address]);
       let cur = m;
       while (cur.parent) {
@@ -144,28 +154,28 @@ export function buildLoops(terminals) {
         cur = byAddr.get(cur.parent);
       }
     }
-    for (const m of members) if (m.parent) byAddr.get(m.parent).children.push(m.address);
+    for (const m of agents) if (m.parent) byAddr.get(m.parent).children.push(m.address);
 
-    // Roots: the lead first, then everyone with no parent in the loop. Members with no parent hang
-    // under the lead in a view, but routing treats them as reporting to the lead.
-    const roots = members.filter((m) => !m.parent).map((m) => m.address)
-      .sort((a, b) => (a === lead ? -1 : b === lead ? 1 : 0));
+    // Roots: the coordinator first, then everyone with no parent in the loop. Agents with no parent hang
+    // under the coordinator in a view, but routing treats them as reporting to the coordinator.
+    const roots = agents.filter((m) => !m.parent).map((m) => m.address)
+      .sort((a, b) => (a === coordinator ? -1 : b === coordinator ? 1 : 0));
 
-    const goalFrom = [byAddr.get(lead), ...members].find((m) => m?.terminal.labels[LABEL.goal]);
+    const goalFrom = [byAddr.get(coordinator), ...agents].find((m) => m?.terminal.labels[LABEL.goal]);
     const slash = id.indexOf("/");
-    loops.push({ id, name: slash < 0 ? id : id.slice(slash + 1), machine: slash < 0 ? null : id.slice(0, slash), goal: goalFrom?.terminal.labels[LABEL.goal] ?? null, lead, leads, warnings, members, roots,
+    loops.push({ id, name: slash < 0 ? id : id.slice(slash + 1), machine: slash < 0 ? null : id.slice(0, slash), goal: goalFrom?.terminal.labels[LABEL.goal] ?? null, coordinator, coordinators, warnings, agents, roots,
       retired: gone.get(id) ?? [] });
   }
   return { loops, loose };
 }
 
 /**
- * Where a member's news goes. Returns null when there is none (working, idle),
+ * Where an agent's news goes. Returns null when there is none (working, idle),
  * else { to: "you" | address, kind: "blocked" | "done", why }.
- * blockedSince: ms since the epoch when this member was first seen blocked (the adapter keeps it).
+ * blockedSince: ms since the epoch when this agent was first seen blocked (the adapter keeps it).
  */
 export function route(loop, address, { now = 0, blockedSince = null } = {}) {
-  const byAddr = new Map(loop.members.map((m) => [m.address, m]));
+  const byAddr = new Map(loop.agents.map((m) => [m.address, m]));
   const m = byAddr.get(address);
   if (!m) return null;
   const kind = m.status === "blocked" ? "blocked" : m.status === "done" ? "done" : null;
@@ -173,21 +183,21 @@ export function route(loop, address, { now = 0, blockedSince = null } = {}) {
 
   if (m.needsYou) return { to: "you", kind, why: "asked for you" };
   if (kind === "blocked" && YOURS_KINDS.has(m.kind)) return { to: "you", kind, why: `${m.kind} prompt` };
-  if (m.isLead) return { to: "you", kind, why: "the lead" };
-  if (!loop.lead) return { to: "you", kind, why: "you lead this loop" };
+  if (m.isCoordinator) return { to: "you", kind, why: "the coordinator" };
+  if (!loop.coordinator) return { to: "you", kind, why: "you coordinate this loop" };
   if (m.notifyMe) return { to: "you", kind, why: "set to reach you" };
   if (kind === "blocked" && blockedSince != null && now - blockedSince >= ESCALATE_MS)
     return { to: "you", kind, why: "nobody cleared it" };
 
-  // Up the reports-to chain to the first member who isn't blocked; the lead catches the rest.
+  // Up the reports-to chain to the first agent who isn't blocked; the coordinator catches the rest.
   const seen = new Set([address]);
   let cur = m.parent ? byAddr.get(m.parent) : null;
-  while (cur && cur.status === "blocked" && !cur.isLead && cur.parent && !seen.has(cur.parent)) {
+  while (cur && cur.status === "blocked" && !cur.isCoordinator && cur.parent && !seen.has(cur.parent)) {
     seen.add(cur.address);
     cur = byAddr.get(cur.parent);
   }
-  const to = cur && !(cur.status === "blocked" && !cur.isLead) ? cur.address : loop.lead;
-  return { to, kind, why: to === m.parent ? "its parent" : to === loop.lead ? "the lead" : "further up" };
+  const to = cur && !(cur.status === "blocked" && !cur.isCoordinator) ? cur.address : loop.coordinator;
+  return { to, kind, why: to === m.parent ? "its parent" : to === loop.coordinator ? "the coordinator" : "further up" };
 }
 
 /**
@@ -198,7 +208,7 @@ export function route(loop, address, { now = 0, blockedSince = null } = {}) {
 export function alerts({ loops, loose }, { now = 0, blockedSince = {} } = {}) {
   const out = [];
   for (const loop of loops)
-    for (const m of loop.members) {
+    for (const m of loop.agents) {
       const since = blockedSince[m.address] ?? (m.status === "blocked" ? m.terminal.status_ms ?? null : null);
       const r = route(loop, m.address, { now, blockedSince: since });
       if (r) out.push({ address: m.address, loop: loop.id, ...r });
@@ -258,15 +268,15 @@ export function forYouLabel(counts) {
 
 /**
  * The view: loops ordered by what needs you, each with its status for you.
- * Returns [{ id, goal, lead, needsYou (count), handling (count of blocks the loop is handling
- *            itself), status (most urgent member), warnings, members, roots }].
+ * Returns [{ id, goal, coordinator, needsYou (count), handling (count of blocks the loop is handling
+ *            itself), status (most urgent agent), warnings, agents, roots }].
  */
 export function loopView(built, routed) {
   const rows = built.loops.map((loop) => {
     const mine = routed.filter((a) => a.loop === loop.id);
-    const term = new Map(loop.members.map((m) => [m.address, m.terminal]));
+    const term = new Map(loop.agents.map((m) => [m.address, m.terminal]));
     const forYouCount = forYouCounts(mine.filter((a) => a.to === "you").map((a) => forYouKind(a, term.get(a.address))));
-    const status = loop.members.reduce((best, m) =>
+    const status = loop.agents.reduce((best, m) =>
       (URGENCY[m.status] ?? 0) > (URGENCY[best] ?? 0) ? m.status : best, null);
     return {
       ...loop,

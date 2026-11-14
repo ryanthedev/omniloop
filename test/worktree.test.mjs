@@ -1,4 +1,4 @@
-// End to end: `omniloop new --no-lead` and `add-dir` against throwaway repos under a temporary HOME (so ~/loops is
+// End to end: `omniloop new --no-coordinator` and `add-dir` against throwaway repos under a temporary HOME (so ~/loops is
 // temporary too). Covers the user's rule: a worktree only when another loop already uses the repo.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -48,11 +48,11 @@ test("omniloop new: first loop stays in place; a second loop on the same repo ge
   const s = sandbox();
   const a = s.repo("repos/app");
   writeFileSync(join(a, "wip.txt"), "uncommitted\n");
-  const out1 = s.omniloop("new", "first", "--goal", "g", "--dir", a, "--no-lead");
+  const out1 = s.omniloop("new", "first", "--goal", "g", "--dir", a, "--no-coordinator");
   assert.match(out1, /shared \(no other loop uses it\)/);
   assert.equal(s.manifest("first").dirs[0].worktree, undefined);
 
-  const out2 = s.omniloop("new", "second", "--goal", "g", "--dir", a, "--no-lead");
+  const out2 = s.omniloop("new", "second", "--goal", "g", "--dir", a, "--no-coordinator");
   const d = s.manifest("second").dirs[0];
   assert.equal(d.path, a);
   assert.equal(d.worktree, join(s.home, "loops", "second", "wt", "app"));
@@ -72,12 +72,12 @@ test("fails soft and skips: no commits, subfolder, not git, live config, branch 
   const sub = join(app, "pkg"); mkdirSync(sub);
   const plain = join(s.home, "repos", "plain"); mkdirSync(plain, { recursive: true });
   const cfg = s.repo(".config");
-  s.omniloop("new", "one", "--goal", "g", "--dir", empty, "--dir", app, "--dir", plain, "--dir", cfg, "--no-lead");
+  s.omniloop("new", "one", "--goal", "g", "--dir", empty, "--dir", app, "--dir", plain, "--dir", cfg, "--no-coordinator");
   // A branch named like the loop's already exists: it is reused, not an error.
   s.sh("git", ["branch", "two/work"], app);
-  const dry = s.omniloop("new", "two", "--goal", "g", "--dir", app, "--dry-run", "--no-lead");
+  const dry = s.omniloop("new", "two", "--goal", "g", "--dir", app, "--dry-run", "--no-coordinator");
   assert.match(dry, /would get its own worktree/);
-  const out = s.omniloop("new", "two", "--goal", "g", "--dir", empty, "--dir", sub, "--dir", plain, "--dir", cfg, "--dir", app, "--no-lead");
+  const out = s.omniloop("new", "two", "--goal", "g", "--dir", empty, "--dir", sub, "--dir", plain, "--dir", cfg, "--dir", app, "--no-coordinator");
   assert.match(out, /empty: shared \(the repo has no commits yet\)/);
   assert.match(out, /pkg: shared \(inside the repo/);
   assert.match(out, /plain: shared \(not a git repo\)/);
@@ -91,8 +91,8 @@ test("add-dir: a repo another loop uses gets a worktree; the target name moves a
   const s = sandbox();
   const a = s.repo("repos/lib");
   const b = s.repo("other/lib");
-  s.omniloop("new", "owner", "--goal", "g", "--dir", a, "--dir", b, "--no-lead");
-  s.omniloop("new", "late", "--goal", "g", "--no-lead");
+  s.omniloop("new", "owner", "--goal", "g", "--dir", a, "--dir", b, "--no-coordinator");
+  s.omniloop("new", "late", "--goal", "g", "--no-coordinator");
   s.omniloop("add-dir", a, "--loop", "late");
   s.omniloop("add-dir", b, "--loop", "late");
   const dirs = s.manifest("late").dirs;

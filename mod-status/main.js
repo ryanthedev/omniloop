@@ -1,5 +1,5 @@
 // Loop status: a status bar block for the terminal you're in. In a loop it reads
-//   ◎ plenary-m2  Ship Plenary M2 · t187 manager platform · reports to t1bx proxy · lead: you · 2 for you
+//   ◎ plenary-m2  Ship Plenary M2 · t187 manager platform · reports to t1bx proxy · coordinator: you · 2 for you
 // and outside every loop: "t3s zsh · not in a loop · ⌘O". Click: open the omniloop picker.
 // Data: terminals() and focused(); "for you" includes the watcher's stalls (its state file).
 
@@ -39,8 +39,8 @@ export default class LoopStatus extends View {
         .child(div().text_size(11.5).font_semibold().text_color(t.accent).child(`◎ ${who.loop}`)))
       .when(Boolean(who.goal), (el) => el.child(div().flex_none().max_w(240).truncate().text_color(t.muted).child(who.goal)))
       .child(dot()).child(me)
-      .child(dot()).child(part(who.isLead ? "you lead it" : who.parent ? `reports to ${who.parent} ${who.parentName ?? ""}`.trim() : who.lead ? `reports to ${who.lead} (lead)` : "reports to you"))
-      .child(dot()).child(part(`lead: ${who.lead ?? "you"}`))
+      .child(dot()).child(part(who.isCoordinator ? "you coordinate it" : who.parent ? `reports to ${who.parent} ${who.parentName ?? ""}`.trim() : who.coordinator ? `reports to ${who.coordinator} (coordinator)` : "reports to you"))
+      .child(dot()).child(part(`coordinator: ${who.coordinator ?? "you"}`))
       .when(who.needsYou > 0, (el) => el.child(dot()).child(part(who.loopForYouLabel || `${who.needsYou} for you`, t.blocked)))
       .child(dot()).child(part(`${who.size} session${who.size === 1 ? "" : "s"}`, t.dim));
   }

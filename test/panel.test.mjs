@@ -9,16 +9,16 @@ const disk = [
   { id: "gamma", goals: [{ n: 1, text: "Old" }], dirs: [], projects: [], tasks: { yours: [], agents: [] }, touched: 10 },
 ];
 const live = [
-  { id: "alpha", goal: "Ship alpha", lead: "t1", needsYou: 0, lastWithYou: 100, ago: "1m",
-    rows: [{ address: "t1", name: "lead", depth: 0, status: "working", isLead: true }, { address: "t3", name: "parser", depth: 1, status: "idle" }] },
-  { id: "ska/remote", goal: "Remote", lead: "ska/t9", needsYou: 2, lastWithYou: null, rows: [] },
+  { id: "alpha", goal: "Ship alpha", coordinator: "t1", needsYou: 0, lastWithYou: 100, ago: "1m",
+    rows: [{ address: "t1", name: "coordinator", depth: 0, status: "working", isCoordinator: true }, { address: "t3", name: "parser", depth: 1, status: "idle" }] },
+  { id: "ska/remote", goal: "Remote", coordinator: "ska/t9", needsYou: 2, lastWithYou: null, rows: [] },
 ];
 
 test("allLoops joins disk and live loops; needs-you, then recent, then touched", () => {
   const ls = allLoops(disk, live);
   assert.deepEqual(ls.map((l) => l.id), ["ska/remote", "alpha", "beta", "gamma"]);
   const a = ls.find((l) => l.id === "alpha");
-  assert.equal(a.goal, "Ship alpha"); assert.equal(a.yours, 1); assert.equal(a.agentTasks, 1); assert.equal(a.members, 2);
+  assert.equal(a.goal, "Ship alpha"); assert.equal(a.yours, 1); assert.equal(a.agentTasks, 1); assert.equal(a.agents, 2);
   assert.ok(a.live && a.local);
   const r = ls[0]; assert.ok(r.live && !r.local);
 });
@@ -31,10 +31,10 @@ test("currentLoop: pinned, else focused, else first", () => {
   assert.equal(currentLoop({ pinned: null }, [], null), null);
 });
 
-test("loopRows shows goals, your todo, agents' tasks, members and context", () => {
+test("loopRows shows goals, your todo, agents' tasks, agents and context", () => {
   const rows = loopRows("alpha", disk[0], live[0]);
   const kinds = rows.map((r) => r.kind);
-  assert.deepEqual(kinds, ["head", "goal", "goal", "head", "todo", "head", "task", "head", "member", "member", "head", "dir", "project"]);
+  assert.deepEqual(kinds, ["head", "goal", "goal", "head", "todo", "head", "task", "head", "agent", "agent", "head", "dir", "project"]);
   assert.equal(rows[0].text, "GOALS (2)");
   assert.ok(rows[1].current && !rows[2].current);
   const empty = loopRows("beta", disk[1], null);
@@ -62,7 +62,7 @@ test("cursor moves over pickable rows only and clamps", () => {
   s = step(s, "g", rows).state; s = step(s, "k", rows).state; assert.equal(s.sel.loop, 0);
 });
 
-test("x or space on your todo finishes it (enter doesn't: no undo); enter on a member jumps", () => {
+test("x or space on your todo finishes it (enter doesn't: no undo); enter on an agent jumps", () => {
   const rows = loopRows("alpha", disk[0], live[0]);
   let s = initialState();
   assert.equal(step(s, "enter", rows).action, undefined);
@@ -83,7 +83,7 @@ test("views switch with 1, 2 and tab; enter on a loop pins it and opens the loop
   s = step(s, "j", rows).state;
   const r = step(s, "enter", rows);
   assert.equal(r.state.pinned, "alpha"); assert.equal(r.state.view, "loop"); assert.equal(r.action.type, "open-loop");
-  assert.deepEqual(step(s, "o", rows).action, { type: "lead", loop: "alpha", terminal: "t1" });
+  assert.deepEqual(step(s, "o", rows).action, { type: "coordinator", loop: "alpha", terminal: "t1" });
   assert.equal(step(r.state, "f", []).state.pinned, null);
 });
 
@@ -118,7 +118,7 @@ test("keyName normalizes gpui key events and leaves chords to Herdr", () => {
 test("other machines: keys join live loops, a remote terminal's loop is found, keys split", () => {
   const remote = onMachine([{ id: "hub", goals: [{ n: 1, text: "Hub" }], dirs: [], projects: [], tasks: { yours: [{ n: 1, text: "Check" }], agents: [] }, touched: 1 }], "vana");
   assert.equal(remote[0].id, "vana/hub");
-  const ls = allLoops(remote, [{ id: "vana/hub", goal: "Hub", lead: "vana/t29", needsYou: 0, lastWithYou: 5, rows: [] }]);
+  const ls = allLoops(remote, [{ id: "vana/hub", goal: "Hub", coordinator: "vana/t29", needsYou: 0, lastWithYou: 5, rows: [] }]);
   assert.equal(ls.length, 1); assert.ok(ls[0].live && ls[0].local); assert.equal(ls[0].yours, 1);
   const terms = [{ address: "vana/t29", labels: { omniloop: "hub" } }, { address: "t1", labels: { omniloop: "here" } }, { address: "t2", labels: {} }];
   assert.equal(loopOfTerminal(terms, "vana/t29"), "vana/hub");
@@ -223,12 +223,12 @@ test("c asks to collapse; collapseTo shrinks to a strip and opens to the last wi
   assert.equal(forYouTotal([{ needsYou: 2 }, { needsYou: 0 }, {}]), 2);
 });
 
-test("for-you words: the loop's label and a member's word replace counts and reasons", () => {
+test("for-you words: the loop's label and an agent's word replace counts and reasons", () => {
   const lv = [{ ...live[0], needsYou: 3, forYouLabel: "1 needs approval · 2 asked you",
-    rows: [{ ...live[0].rows[0], forYou: "the lead", forYouLabel: "asked you" }, live[0].rows[1]] }];
+    rows: [{ ...live[0].rows[0], forYou: "the coordinator", forYouLabel: "asked you" }, live[0].rows[1]] }];
   const a = allLoops(disk, lv).find((l) => l.id === "alpha");
   assert.equal(a.forYou, "1 needs approval · 2 asked you");
-  const m = loopRows("alpha", disk[0], lv[0]).find((r) => r.kind === "member" && r.isLead);
+  const m = loopRows("alpha", disk[0], lv[0]).find((r) => r.kind === "agent" && r.isCoordinator);
   assert.equal(m.forYou, "asked you");
   // an older view (another machine's) with counts only
   assert.equal(allLoops([], [{ ...live[1] }])[0].forYou, "2 for you");

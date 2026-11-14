@@ -107,8 +107,8 @@ test("proposeArgs: the model gets only the request, no tools or settings", () =>
 // ---- the ⌘O list ----
 
 const view = [
-  { id: "omniloop", goal: "Build omniloop", lead: "t1", needsYou: 0, lastWithYou: 300, ago: "5m", rows: [{ address: "t1", name: "lead" }] },
-  { id: "ska/remote-x", goal: "Remote work", lead: "ska/t2", needsYou: 1, lastWithYou: 100, rows: [{ address: "ska/t2", name: "lead" }] },
+  { id: "omniloop", goal: "Build omniloop", coordinator: "t1", needsYou: 0, lastWithYou: 300, ago: "5m", rows: [{ address: "t1", name: "coordinator" }] },
+  { id: "ska/remote-x", goal: "Remote work", coordinator: "ska/t2", needsYou: 1, lastWithYou: 100, rows: [{ address: "ska/t2", name: "coordinator" }] },
 ];
 const index = [
   { id: "omniloop", goal: "Build omniloop", dirs: ["/r/omniloop"], projects: [], tasks: ["write the spec"], feed: ["shipped the watcher"], touched: 50 },
@@ -281,10 +281,10 @@ test("@filter: the new-loop row carries only the words after the @token", () => 
   assert.equal(rows[0].goal, "zebra");
 });
 
-test("screenLines: strips ANSI and '[hc] ' notices, trailing blanks, keeps the last n; screenLabel names a real lead only", async () => {
+test("screenLines: strips ANSI and '[hc] ' notices, trailing blanks, keeps the last n; screenLabel names a real coordinator only", async () => {
   const { screenLines, screenLabel } = await import("../core/picker.js");
   assert.deepEqual(screenLines("[hc] note\n\x1b[1mone\x1b[0m  \ntwo\n\n\n"), ["one", "two"]);
   assert.deepEqual(screenLines("a\nb\nc\nd", 2), ["c", "d"]);
-  assert.equal(screenLabel(true, "t1"), "LEAD'S SCREEN");
+  assert.equal(screenLabel(true, "t1"), "COORDINATOR'S SCREEN");
   assert.equal(screenLabel(false, "t1"), "SCREEN · t1");
 });

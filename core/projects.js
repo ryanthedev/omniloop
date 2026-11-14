@@ -2,10 +2,10 @@
 // Pure; the CLI reads the folders. A project is a folder:
 //
 //   project.json      { name, description, triggers: { words: [], urls: [] }, repos: [], requires: {...}, ... }
-//   CONTEXT.md     what every member should know; copied into the loop's CLAUDE.md
+//   CONTEXT.md     what every agent should know; copied into the loop's CLAUDE.md
 //   .claude-plugin/plugin.json + skills/ (+ .mcp.json)   so the folder loads as a Claude Code plugin (--plugin-dir)
 //
-// A loop lists its projects by name in loop.json ("projects"). Members started in it get each project's folder as a plugin
+// A loop lists its projects by name in loop.json ("projects"). Agents started in it get each project's folder as a plugin
 // (its skills and tools) and its repos as --add-dir folders; CLAUDE.md gets each project's CONTEXT.md.
 
 /** Projects whose triggers appear in `text`, best first: [{ name, score, hits }]. URL hits count double. */
@@ -45,7 +45,7 @@ export function removeProject(manifest, name) {
 }
 
 /**
- * What the loop's projects add to a member's launch. `found`: [{ name, dir, repos }] for the loop's projects that exist
+ * What the loop's projects add to an agent's launch. `found`: [{ name, dir, repos }] for the loop's projects that exist
  * (repos already resolved to absolute paths). Returns { pluginDirs, dirs, missing }.
  */
 export function projectLaunch(manifest, found) {

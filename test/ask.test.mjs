@@ -62,9 +62,9 @@ test("isHumanPrompt: omniloop's own typed notes are not you (goal note, task not
   const task = taskNote({ n: 1, by: "t1", text: "do x" }, "L");
   assert.match(task, /^omniloop:/);
   assert.equal(isHumanPrompt(task), false);
-  // The watcher's own send: a member finishes, the idle lead is typed a note.
+  // The watcher's own send: an agent finishes, the idle coordinator is typed a note.
   const T = (address, status, labels, extra = {}) => ({ address, state: "live", status: { state: status }, labels: { omniloop: "L", ...labels }, created_ms: 0, ...extra });
-  const before = [T("t1", "idle", { "omniloop.lead": "1" }), T("t2", "working", { "omniloop.to": "t1" }, { turn: 1 })];
+  const before = [T("t1", "idle", { "omniloop.coordinator": "1" }), T("t2", "working", { "omniloop.to": "t1" }, { turn: 1 })];
   const after = [before[0], { ...before[1], status: { state: "done" }, turn: 2 }];
   const r = step(initState(before, 0), after, 1);
   const send = r.actions.find((a) => a.type === "send");
@@ -77,7 +77,7 @@ test("isHumanPrompt: omniloop's own typed notes are not you (goal note, task not
 
 // ---- the hook itself, with a fake hc first on PATH ----
 
-const MEMBER = JSON.stringify({ labels: { omniloop: "L" } });
+const AGENT = JSON.stringify({ labels: { omniloop: "L" } });
 function rig(fn) {
   const dir = mkdtempSync(join(tmpdir(), "askhook-"));
   const bin = join(dir, "bin"), calls = join(dir, "calls"), home = join(dir, "home");
@@ -85,7 +85,7 @@ function rig(fn) {
   writeFileSync(join(bin, "hc"), `#!/bin/sh\nif [ "$1" = get ]; then printf '%s\\n' "$*" >> "${calls}.get"; printf '%s' "$HC_FAKE_GET"; exit 0; fi\nprintf '%s\\n' "$*" >> "${calls}"\n`);
   chmodSync(join(bin, "hc"), 0o755);
   const run = (input, env = {}) => spawnSync("node", [HOOK], { input: typeof input === "string" ? input : JSON.stringify(input), encoding: "utf8",
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, OMNILOOP_HOME: home, HC_TERMINAL_ID: "t9", HC_FAKE_GET: MEMBER, ...env } });
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, OMNILOOP_HOME: home, HC_TERMINAL_ID: "t9", HC_FAKE_GET: AGENT, ...env } });
   const seen = () => (existsSync(calls) ? readFileSync(calls, "utf8").trim().split("\n") : []);
   try { return fn({ run, seen, home, calls }); } finally { rmSync(dir, { recursive: true, force: true }); }
 }
@@ -159,7 +159,7 @@ test("ask-hook: outside a loop (no omniloop label, hc get fails or is garbage) i
 }));
 
 test("ask-hook: a hand-started Claude in a loop terminal (labelled, no prior session record) still sets omniloop.you", () => rig(({ run, seen, calls }) => {
-  run(prompt("hello"), { HC_FAKE_GET: JSON.stringify({ labels: { omniloop: "m/loop", "omniloop.lead": "1" } }) });
+  run(prompt("hello"), { HC_FAKE_GET: JSON.stringify({ labels: { omniloop: "m/loop", "omniloop.coordinator": "1" } }) });
   assert.match(seen()[0], /^label t9 omniloop\.ask= omniloop\.you=\d+$/);
   assert.equal(readFileSync(`${calls}.get`, "utf8").trim(), "get --json t9");
 }));

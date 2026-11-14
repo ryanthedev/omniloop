@@ -47,13 +47,13 @@ export function parseFeed(text, { last } = {}) {
 }
 
 /**
- * What `omniloop reply` does with a message for the loop's lead, from the lead's address and status:
+ * What `omniloop reply` does with a message for the loop's coordinator, from the coordinator's address and status:
  *   { send: { if } }  type it now (`hc send --if idle` for idle; no guard for done)
- *   { hold: true }    the lead is working, blocked, or not an agent: queue it for the watcher's next flush
- *   { none: true }    no lead on this computer: nobody to tell (another machine's lead is never typed into)
+ *   { hold: true }    the coordinator is working, blocked, or not an agent: queue it for the watcher's next flush
+ *   { none: true }    no coordinator on this computer: nobody to tell (another machine's coordinator is never typed into)
  */
-export function replyPlan(lead, status) {
-  if (typeof lead !== "string" || !lead || machineOf(lead) != null) return { none: true };
+export function replyPlan(coordinator, status) {
+  if (typeof coordinator !== "string" || !coordinator || machineOf(coordinator) != null) return { none: true };
   if (status === "idle") return { send: { if: "idle" } };
   if (status === "done") return { send: { if: null } };
   return { hold: true };

@@ -1,16 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  loopKey,
+  loopKey, COORDINATOR_KEYS, isCoordinatorLabeled,
   buildLoops, route, alerts, newForYou, trackBlocked, loopView, qualify, ESCALATE_MS, forYouKind, forYouCounts, forYouLabel,
 } from "../core/omniloop.js";
 
 const T = (address, status, labels = {}, created_ms = 0) => ({ address, status, labels, created_ms });
 const loop = (id, extra = {}) => ({ omniloop: id, ...extra });
 
-// A loop: lead t1, manager t2 under it, builder t3 under t2, verifier t4 with no parent.
+// A loop: coordinator t1, manager t2 under it, builder t3 under t2, verifier t4 with no parent.
 const team = () => [
-  T("t1", "working", loop("m2", { "omniloop.lead": "1", "omniloop.goal": "Ship Plenary M2" }), 1),
+  T("t1", "working", loop("m2", { "omniloop.coordinator": "1", "omniloop.goal": "Ship Plenary M2" }), 1),
   T("t2", "working", loop("m2", { "omniloop.to": "t1" }), 2),
   T("t3", "working", loop("m2", { "omniloop.to": "t2" }), 3),
   T("t4", "working", loop("m2"), 4),
@@ -25,18 +25,18 @@ const only = (ts, address, opts) => {
 test("groups by loop id across spaces; terminals with no loop are loose", () => {
   const { loops, loose } = buildLoops([...team(), T("t9", "idle")]);
   assert.equal(loops.length, 1);
-  assert.equal(loops[0].lead, "t1");
+  assert.equal(loops[0].coordinator, "t1");
   assert.equal(loops[0].goal, "Ship Plenary M2");
   assert.deepEqual(loops[0].roots, ["t1", "t4"]);
   assert.deepEqual(loose.map((t) => t.address), ["t9"]);
 });
 
-test("a blocked member goes to its parent, not you", () => {
+test("a blocked agent goes to its parent, not you", () => {
   assert.deepEqual(only(set(team(), "t3", "blocked"), "t3"), { to: "t2", kind: "blocked", why: "its parent" });
 });
 
-test("a member with no parent goes to the lead", () => {
-  assert.deepEqual(only(set(team(), "t4", "blocked"), "t4"), { to: "t1", kind: "blocked", why: "the lead" });
+test("an agent with no parent goes to the coordinator", () => {
+  assert.deepEqual(only(set(team(), "t4", "blocked"), "t4"), { to: "t1", kind: "blocked", why: "the coordinator" });
 });
 
 test("a blocked parent passes it further up", () => {
@@ -44,18 +44,18 @@ test("a blocked parent passes it further up", () => {
   assert.equal(only(ts, "t3").to, "t1");
 });
 
-test("the lead reaches you", () => {
+test("the coordinator reaches you", () => {
   assert.equal(only(set(team(), "t1", "blocked"), "t1").to, "you");
   assert.equal(only(set(team(), "t1", "done"), "t1").to, "you");
 });
 
-test("a member's done is its parent's news", () => {
+test("an agent's done is its parent's news", () => {
   assert.equal(only(set(team(), "t3", "done"), "t3").to, "t2");
 });
 
-test("no lead: you lead, every block reaches you", () => {
+test("no coordinator: you coordinate, every block reaches you", () => {
   const ts = [T("a", "blocked", loop("solo")), T("b", "working", loop("solo", { "omniloop.to": "a" }))];
-  assert.deepEqual(only(ts, "a"), { to: "you", kind: "blocked", why: "you lead this loop" });
+  assert.deepEqual(only(ts, "a"), { to: "you", kind: "blocked", why: "you coordinate this loop" });
 });
 
 test("needs=you (credentials, spending, public) skips the chain", () => {
@@ -63,7 +63,7 @@ test("needs=you (credentials, spending, public) skips the chain", () => {
   assert.equal(only(ts, "t3").why, "asked for you");
 });
 
-test("notify=me lets a member reach you directly", () => {
+test("notify=me lets an agent reach you directly", () => {
   const ts = set(team(), "t4", "blocked", { "omniloop.notify": "me" });
   assert.equal(only(ts, "t4").to, "you");
 });
@@ -79,20 +79,20 @@ test("a permission or auth prompt reaches you: a parent can't approve it", () =>
   assert.deepEqual(only(ts, "t3"), { to: "you", kind: "blocked", why: "permission prompt" });
 });
 
-test("working and idle members route nowhere", () => {
+test("working and idle agents route nowhere", () => {
   assert.equal(only(team(), "t2"), null);
 });
 
-test("two leads: the oldest leads, with a warning", () => {
-  const ts = set(team(), "t2", "working", { "omniloop.lead": "1" });
+test("two coordinators: the oldest coordinates, with a warning", () => {
+  const ts = set(team(), "t2", "working", { "omniloop.coordinator": "1" });
   const [l] = buildLoops(ts).loops;
-  assert.equal(l.lead, "t1");
+  assert.equal(l.coordinator, "t1");
   assert.equal(l.warnings.length, 1);
 });
 
 test("omniloop.to cycles are cut", () => {
   const ts = [
-    T("a", "blocked", loop("x", { "omniloop.lead": "1" })),
+    T("a", "blocked", loop("x", { "omniloop.coordinator": "1" })),
     T("b", "blocked", loop("x", { "omniloop.to": "c" })),
     T("c", "working", loop("x", { "omniloop.to": "b" })),
   ];
@@ -105,7 +105,7 @@ test("remote labels get their machine back", () => {
   assert.equal(qualify("t7", "m1/t9"), "m1/t7");
   assert.equal(qualify("m2/t7", "m1/t9"), "m2/t7");
   const ts = [
-    T("m1/t1", "working", loop("r", { "omniloop.lead": "1" })),
+    T("m1/t1", "working", loop("r", { "omniloop.coordinator": "1" })),
     T("m1/t2", "blocked", loop("r", { "omniloop.to": "t1" })),
   ];
   assert.equal(only(ts, "m1/t2").to, "m1/t1");
@@ -113,18 +113,18 @@ test("remote labels get their machine back", () => {
 
 test("a loop belongs to one machine: the same id on two machines is two loops", () => {
   const ts = [
-    T("t1", "working", loop("sec", { "omniloop.lead": "1" })),
-    T("m1/t1", "working", loop("sec", { "omniloop.lead": "1" })),
+    T("t1", "working", loop("sec", { "omniloop.coordinator": "1" })),
+    T("m1/t1", "working", loop("sec", { "omniloop.coordinator": "1" })),
     T("m1/t2", "blocked", loop("sec", { "omniloop.to": "t1" })),
     T("m2/t1", "idle", loop("sec")),
   ];
   const { loops } = buildLoops(ts);
-  assert.deepEqual(loops.map((l) => [l.id, l.name, l.machine, l.lead, l.warnings.length]).sort(),
+  assert.deepEqual(loops.map((l) => [l.id, l.name, l.machine, l.coordinator, l.warnings.length]).sort(),
     [["m1/sec", "sec", "m1", "m1/t1", 0], ["m2/sec", "sec", "m2", null, 0], ["sec", "sec", null, "t1", 0]]);
   assert.equal(loopKey(ts[0]), "sec");
   assert.equal(loopKey(ts[1]), "m1/sec");
   const m1 = loops.find((l) => l.id === "m1/sec");
-  assert.equal(route(m1, "m1/t2").to, "m1/t1");   // its own machine's lead, never this computer's t1
+  assert.equal(route(m1, "m1/t2").to, "m1/t1");   // its own machine's coordinator, never this computer's t1
 });
 
 test("alerts: loose blocked terminals reach you as today", () => {
@@ -157,30 +157,30 @@ test("loopView puts loops that need you first and counts what they handle themse
   assert.deepEqual(v.map((l) => [l.id, l.needsYou, l.handling]), [["solo", 1, 0], ["m2", 0, 1]]);
 });
 
-test("a handed-off lead: the successor carries every label, the retired one drops out", () => {
+test("a handed-off coordinator: the successor carries every label, the retired one drops out", () => {
   // omniloop handoff copies all labels to the successor and labels the old one omniloop.retired=<successor>.
   const ts = [
-    T("t1", "done", loop("m2", { "omniloop.lead": "1", "omniloop.retired": "t8" }), 1),
-    T("t8", "blocked", loop("m2", { "omniloop.lead": "1" }), 8),
+    T("t1", "done", loop("m2", { "omniloop.coordinator": "1", "omniloop.retired": "t8" }), 1),
+    T("t8", "blocked", loop("m2", { "omniloop.coordinator": "1" }), 8),
     T("t3", "blocked", loop("m2", { "omniloop.to": "t1" }), 3),
   ];
   const [l] = buildLoops(ts).loops;
-  assert.equal(l.lead, "t8");
+  assert.equal(l.coordinator, "t8");
   assert.deepEqual(l.retired, ["t1"]);
   assert.equal(l.warnings.length, 0);
-  assert.deepEqual(route(l, "t3"), { to: "t8", kind: "blocked", why: "the lead" });
+  assert.deepEqual(route(l, "t3"), { to: "t8", kind: "blocked", why: "the coordinator" });
 });
 
 test("finished terminals leave their loop", () => {
-  const ts = [{ ...T("t1", "done", loop("m2", { "omniloop.lead": "1" }), 1), state: "finished" },
+  const ts = [{ ...T("t1", "done", loop("m2", { "omniloop.coordinator": "1" }), 1), state: "finished" },
     T("t2", "blocked", loop("m2"), 2)];
   const [l] = buildLoops(ts).loops;
-  assert.equal(l.lead, null);
+  assert.equal(l.coordinator, null);
   assert.equal(route(l, "t2").to, "you");
 });
 
 test("error counts as blocked; hc get's {state} status is read too", () => {
-  const ts = [T("t1", "working", loop("m2", { "omniloop.lead": "1" })), T("t2", "error", loop("m2")),
+  const ts = [T("t1", "working", loop("m2", { "omniloop.coordinator": "1" })), T("t2", "error", loop("m2")),
     { ...T("t3", null, loop("m2")), status: { app: "claude-code", state: "blocked" } }];
   const [l] = buildLoops(ts).loops;
   assert.equal(route(l, "t2").to, "t1");
@@ -193,9 +193,9 @@ test("status_ms stands in for blockedSince when the adapter hasn't tracked it", 
   assert.equal(a.find((x) => x.address === "t3").to, "you");
 });
 
-test("why names a grandparent as further up, not the lead", () => {
+test("why names a grandparent as further up, not the coordinator", () => {
   const ts = [
-    T("t1", "working", loop("x", { "omniloop.lead": "1" }), 1),
+    T("t1", "working", loop("x", { "omniloop.coordinator": "1" }), 1),
     T("t2", "working", loop("x", { "omniloop.to": "t1" }), 2),
     T("t3", "blocked", loop("x", { "omniloop.to": "t2" }), 3),
     T("t4", "blocked", loop("x", { "omniloop.to": "t3" }), 4),
@@ -204,7 +204,7 @@ test("why names a grandparent as further up, not the lead", () => {
 });
 
 test("the app's terminals() shape: status is a word, kind is in report", () => {
-  const ts = [T("t1", "working", loop("m2", { "omniloop.lead": "1" })),
+  const ts = [T("t1", "working", loop("m2", { "omniloop.coordinator": "1" })),
     { ...T("t3", "blocked", loop("m2", { "omniloop.to": "t1" })), report: { state: "blocked", kind: "permission" } }];
   assert.equal(only(ts, "t3").why, "permission prompt");
 });
@@ -245,4 +245,22 @@ test("forYouKind: only a done terminal is 'finished'; unknown kinds say 'needs y
   assert.equal(forYouKind({ kind: "done" }), "finished");
   const c = forYouCounts(["undelivered", "other", "other"]);
   assert.equal(forYouLabel(c), "1 not delivered · 2 needs you");
+});
+
+test("an old-style label (omniloop.lead) is still recognised as the coordinator", () => {
+  const ts = [T("t1", "working", loop("old", { "omniloop.lead": "1" }), 1), T("t2", "blocked", loop("old", { "omniloop.to": "t1" }), 2)];
+  const [l] = buildLoops(ts).loops;
+  assert.equal(l.coordinator, "t1");
+  assert.equal(l.agents.find((a) => a.address === "t1").isCoordinator, true);
+  assert.equal(only(ts, "t2").to, "t1");
+  assert.equal(isCoordinatorLabeled({ "omniloop.lead": "1" }), true);
+  assert.equal(isCoordinatorLabeled({ "omniloop.coordinator": "1" }), true);
+  assert.equal(isCoordinatorLabeled({ "omniloop.lead": "", omniloop: "x" }), false);
+});
+
+test("one terminal carrying both the new and the old coordinator key is one coordinator, no warning", () => {
+  const ts = [T("t1", "working", loop("both", { "omniloop.coordinator": "1", "omniloop.lead": "1" }), 1)];
+  const [l] = buildLoops(ts).loops;
+  assert.deepEqual([l.coordinator, l.coordinators, l.warnings], ["t1", ["t1"], []]);
+  assert.deepEqual(COORDINATOR_KEYS, ["omniloop.coordinator", "omniloop.lead"]);
 });

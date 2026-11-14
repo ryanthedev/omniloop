@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validId, loopHome, newManifest, addDir, dirsOn, claudeMd, updateClaudeMd, memberArgv, parseAliasWords, ADD_DIR_ENV, sharedWith } from "../core/loopdir.js";
+import { validId, loopHome, newManifest, addDir, dirsOn, claudeMd, updateClaudeMd, agentArgv, parseAliasWords, ADD_DIR_ENV, sharedWith } from "../core/loopdir.js";
 
 test("ids", () => {
   assert.ok(validId("plenary-m2"));
@@ -39,12 +39,12 @@ test("CLAUDE.md: the context block is rewritten, the rest is kept", () => {
   assert.equal(md2.match(/## Context/g).length, 1);
 });
 
-test("member argv: the user's claude flags, --add-dir, the task, the env var through a login shell", () => {
-  const argv = memberArgv({ shell: "/bin/zsh", claudeArgv: ["claude", "--plugin-dir", "/p"], dirs: ["/r/a", "/r/b"], task: "do x" });
+test("agent argv: the user's claude flags, --add-dir, the task, the env var through a login shell", () => {
+  const argv = agentArgv({ shell: "/bin/zsh", claudeArgv: ["claude", "--plugin-dir", "/p"], dirs: ["/r/a", "/r/b"], task: "do x" });
   // The task comes right after claude: --add-dir takes a list and would swallow a task placed after it.
   assert.deepEqual(argv, ["/bin/zsh", "-lc", `export ${ADD_DIR_ENV}=1; exec "$@"`, "omniloop", "claude", "do x", "--plugin-dir", "/p", "--add-dir", "/r/a", "/r/b"]);
-  assert.deepEqual(memberArgv({ claudeArgv: ["claude"] }).slice(4), ["claude"]);
-  assert.equal(memberArgv({ binDir: "/r/omni/bin" })[2], `export PATH=/r/omni/bin:"$PATH"; export ${ADD_DIR_ENV}=1; exec "$@"`);
+  assert.deepEqual(agentArgv({ claudeArgv: ["claude"] }).slice(4), ["claude"]);
+  assert.equal(agentArgv({ binDir: "/r/omni/bin" })[2], `export PATH=/r/omni/bin:"$PATH"; export ${ADD_DIR_ENV}=1; exec "$@"`);
 });
 
 test("alias words", () => {

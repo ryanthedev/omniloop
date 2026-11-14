@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { matchProjects, strongMatches, addProject, projectLaunch, withProjectsBlock, PROJECTS_START, PROJECTS_END } from "../core/projects.js";
-import { claudeMd, newManifest, memberArgv } from "../core/loopdir.js";
+import { claudeMd, newManifest, agentArgv } from "../core/loopdir.js";
 
 const study = { name: "study", triggers: { words: ["reel", "podcast", "test me"], urls: ["instagram.com", "youtu.be"] } };
 const booking = { name: "booking", triggers: { words: ["pnr", "fare", "booking"], urls: [] } };
@@ -52,8 +52,8 @@ test("withProjectsBlock: inserted after the context block, then replaced in plac
   assert.match(withProjectsBlock("plain", []), new RegExp(`plain\\n\\n${PROJECTS_START}\\n${PROJECTS_END}`));
 });
 
-test("memberArgv: --plugin-dir per project, before the variadic --add-dir", () => {
-  const a = memberArgv({ claudeArgv: ["claude", "--x"], dirs: ["/d"], task: "go", pluginDirs: ["/p/study", "/p/b"] });
+test("agentArgv: --plugin-dir per project, before the variadic --add-dir", () => {
+  const a = agentArgv({ claudeArgv: ["claude", "--x"], dirs: ["/d"], task: "go", pluginDirs: ["/p/study", "/p/b"] });
   const argv = a.slice(4);
   assert.deepEqual(argv, ["claude", "go", "--x", "--plugin-dir", "/p/study", "--plugin-dir", "/p/b", "--add-dir", "/d"]);
 });

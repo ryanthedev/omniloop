@@ -1,11 +1,11 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings, terminals, focused } from "herdr";
-import { loopTabs, whoIs, memberLabel, closeCommand } from "./core/view.js";
+import { loopTabs, whoIs, agentLabel, closeCommand } from "./core/view.js";
 
 // Loop tabs: Herdr's tab bar (a copy of mods/tabs), except that while you're in a terminal that belongs to an
-// omniloop, the bar lists every session in that loop, from any space or machine: the lead first, then its
-// members in tree order. Clicking one jumps there (pane.focus switches space and tab). In a terminal outside
+// omniloop, the bar lists every session in that loop, from any space or machine: the coordinator first, then its
+// agents in tree order. Clicking one jumps there (pane.focus switches space and tab). In a terminal outside
 // every loop, the bar is the space's own tabs, as before. Focus in a mod pane keeps the loop shown last.
 
 function find(node, id) {
@@ -61,23 +61,23 @@ export default class Tabs extends View {
   loopItems(t, lt) {
     const chip = h_flex().id("loop-chip").h(29).px(9).gap(6).rounded(7).items_center().flex_none().text_size(12.5).font_semibold()
       .bg(t.selected ?? t.raised).text_color(t.foreground).child(`◎ ${lt.loop}`);
-    // A member with a pane in this window gets the normal tab controls: icon, close, rename, menu. Drag is left
-    // out, since the loop's order is the member tree.
+    // An agent with a pane in this window gets the normal tab controls: icon, close, rename, menu. Drag is left
+    // out, since the loop's order is the agent tree.
     const item = (m) => {
       const pane = panes().find(p => p.terminal === m.address);
       const tab = pane?.tab;
       const space = tab ? spaces().find(sp => sp.tabs.some(x => x.id === tab)) : null;
-      const label = memberLabel(m, space?.tabs.find(x => x.id === tab));
+      const label = agentLabel(m, space?.tabs.find(x => x.id === tab));
       return h_flex().id(`lt-${m.address}`).h(29).px(10).gap(7).rounded(7).items_center().flex_none().text_size(12.8)
       .border(1).border_color(m.active ? t.border : t.chrome).bg(m.active ? t.raised : t.chrome).text_color(m.active ? t.foreground : t.muted)
       .hover(s => s.bg(t.hover))
       .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); if (tab && e.click_count === 2) run("tab.rename", { id: tab }); })
       .when(Boolean(tab && space), el => el.on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: tab, space: space.id } } }); }))
-      // A member with no pane (e.g. made while the window couldn't add its tab) can't be focused: peek at it
+      // An agent with no pane (e.g. made while the window couldn't add its tab) can't be focused: peek at it
       // instead, which shows it over the tab with a "keep as tab" control.
       .on_click((e) => { if (e?.click_count > 1) return; pane ? run("pane.focus", { terminal: m.address }) : run("terminal.peek", { terminal: m.address }); })
       .children(programIcon(t, pane?.program))
-      .when(m.isLead, el => el.child(div().text_size(11).text_color(t.muted).child("★")))
+      .when(m.isCoordinator, el => el.child(div().text_size(11).text_color(t.muted).child("★")))
       .child(div().flex_none().text_size(10.5).font_semibold().text_color(t.dim).child(m.address))
       .child(div().max_w(170).truncate().child(label))
       .when(Boolean(m.machine), el => el.child(div().px(5).h(16).rounded(4).bg(t.hover).text_size(10).text_color(t.dim).flex().items_center().child(m.machine)))
@@ -100,9 +100,9 @@ export default class Tabs extends View {
       .on_mouse_down("left", stop).on_click(action).child(label);
     const item = (c, i) => {
       const program = panes().find(p => p.tab === c.id && p.program?.agent)?.program ?? panes().find(p => p.tab === c.id)?.program;
-      // The tab's lead terminal: its id and its agent's name, unless someone named the tab.
-      const lead = panes().find(p => p.tab === c.id && p.program?.agent)?.terminal ?? panes().find(p => p.tab === c.id && p.terminal)?.terminal;
-      const who = lead ? whoIs(all, lead) : null;
+      // The tab's main pane terminal (an agent's if it has one): its id and its agent's name, unless someone named the tab.
+      const primary = panes().find(p => p.tab === c.id && p.program?.agent)?.terminal ?? panes().find(p => p.tab === c.id && p.terminal)?.terminal;
+      const who = primary ? whoIs(all, primary) : null;
       const name = c.named ? c.name : who?.name ?? (/^tb\d+$/.test(c.name) ? program?.name ?? "Terminal" : c.name);
       return h_flex().id(`tab-${c.id}`).h(29).px(10).gap(7).rounded(7).items_center().flex_none().text_size(12.8)
         .border(1).border_color(c.active ? t.border : t.chrome).bg(c.active ? t.raised : t.chrome).text_color(c.active ? t.foreground : t.muted)
@@ -115,7 +115,7 @@ export default class Tabs extends View {
         })
         .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: c.id, space: space.id } } }); })
         .children(programIcon(t, program))
-        .when(Boolean(lead), el => el.child(div().flex_none().text_size(10.5).font_semibold().text_color(t.dim).child(lead)))
+        .when(Boolean(primary), el => el.child(div().flex_none().text_size(10.5).font_semibold().text_color(t.dim).child(primary)))
         .child(div().max_w(170).truncate().child(c.zoomed ? `${name} Z` : name))
         .when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
         .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(3).bg(t[c.status])))

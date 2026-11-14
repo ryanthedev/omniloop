@@ -1,12 +1,12 @@
 // lifecycle.js: renaming, removing and self-destructing loops. Pure; bin/omniloop.mjs does the moving and deleting.
 //
-// A loop's id is its folder name (~/loops/<id>), its Herdr space's name, its members' omniloop.loop label, its
+// A loop's id is its folder name (~/loops/<id>), its Herdr space's name, its agents' omniloop.loop label, its
 // worktrees' branch (<id>/work) and the Claude project its sessions are saved under. Renaming moves all of them;
 // "move" and "rename" are the same thing here.
 //
-// A temporary loop (loop.json "temp": true) keeps no memory: its members start without Engram (no credentials,
+// A temporary loop (loop.json "temp": true) keeps no memory: its agents start without Engram (no credentials,
 // the ingest tools disallowed), and when it ends its folder, its Claude transcripts, scratchpads and prompt-history
-// lines are deleted. It ends on `omniloop rm`, or by itself once its last member is gone (the watcher's sweep).
+// lines are deleted. It ends on `omniloop rm`, or by itself once its last agent is gone (the watcher's sweep).
 
 import { worktreeBranch } from "./loopdir.js";
 
@@ -37,13 +37,14 @@ export function renamedManifest(m, { from, to, fromHome, toHome, now }) {
 }
 
 /**
- * Put the new id into the slots omniloop's CLAUDE.md template gives it (title, member line, tools table, Engram
+ * Put the new id into the slots omniloop's CLAUDE.md template gives it (title, intro line, tools table, Engram
  * lines). Only those: an id like "omniloop" or "engram" also names commands and markers, which must stay.
  */
 export function renameText(text, from, to) {
   const e = from.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
   const slots = [
     [new RegExp(`^# Loop: ${e}$`, "m"), `# Loop: ${to}`],
+    // Old-style CLAUDE.md ("You are a member of the omniloop `x`"): keep renaming it.
     [new RegExp(`member of the omniloop \`${e}\``, "g"), `member of the omniloop \`${to}\``],
     [new RegExp(`This is the omniloop \`${e}\``, "g"), `This is the omniloop \`${to}\``],
     [new RegExp(`\`omniloop (ls|start) ${e}(?=[\` ])`, "g"), (_, c) => `\`omniloop ${c} ${to}`],
@@ -85,9 +86,9 @@ export const TEMP_GRACE_MS = 2 * 60_000;
 export const TEMP_ORPHAN_MS = 24 * 3600_000;
 
 /**
- * The watcher's sweep: which temporary loops have ended. A temp loop ends once it has had a member and now has none
- * (`seen`: ids the watcher saw members in; it is updated in place), or when it never had one for a day.
- * live: the ids of loops with a live member on this computer right now. Never call this when hc failed.
+ * The watcher's sweep: which temporary loops have ended. A temp loop ends once it has had an agent and now has none
+ * (`seen`: ids the watcher saw agents in; it is updated in place), or when it never had one for a day.
+ * live: the ids of loops with a live agent on this computer right now. Never call this when hc failed.
  */
 export function endedTempLoops(manifests, live, seen, now) {
   const out = [];
@@ -121,7 +122,7 @@ export function scrubHistory(text, folders) {
   return { text: keep.length ? keep.join("\n") + "\n" : "", dropped };
 }
 
-/** Engram stays out of a temporary loop: no credentials in the members' environment, and its write tools disallowed. */
+/** Engram stays out of a temporary loop: no credentials in the agents' environment, and its write tools disallowed. */
 export const NO_MEMORY_ENV = ["ENGRAM_TOKEN", "ENGRAM_ADDR"];
 export const NO_MEMORY_TOOLS = [
   "mcp__plugin_engram_engram__memory_ingest",

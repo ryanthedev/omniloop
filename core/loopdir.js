@@ -1,9 +1,9 @@
-// loopdir.js: a loop is a folder, and that folder is the Claude Code project its members share. Pure.
+// loopdir.js: a loop is a folder, and that folder is the Claude Code project its agents share. Pure.
 //
-//   ~/loops/<id>/CLAUDE.md   goal and context; every member reads it at start (it is their project's CLAUDE.md)
+//   ~/loops/<id>/CLAUDE.md   goal and context; every agent reads it at start (it is their project's CLAUDE.md)
 //   ~/loops/<id>/loop.json   { id, goal, dirs: [{ path, machine }], created_ms }
 //
-// Members start in the loop folder, with --add-dir for each context folder on their machine, and with
+// Agents start in the loop folder, with --add-dir for each context folder on their machine, and with
 // CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1 so those folders' own CLAUDE.md files load too.
 // Their sessions are saved under one Claude project (the loop folder), so a loop's history stays together.
 
@@ -36,7 +36,7 @@ export function addDir(manifest, path, machine = null) {
 }
 
 /**
- * The folders to start a member on `machine` with (--add-dir): a folder's own worktree when the loop has one, else
+ * The folders to start an agent on `machine` with (--add-dir): a folder's own worktree when the loop has one, else
  * the folder. `path` stays the folder's identity everywhere else (sharing, the panel, search).
  */
 export function launchDirsOn(manifest, machine = null) {
@@ -79,7 +79,7 @@ export function setWorktree(manifest, path, { worktree, branch, base, dirty = 0 
   return { ...manifest, dirs: manifest.dirs.map((d) => (d.path === path && !d.machine ? { ...d, worktree, branch, base, dirty } : d)) };
 }
 
-/** The folders a member on `machine` (null = this computer) can be given with --add-dir. */
+/** The folders an agent on `machine` (null = this computer) can be given with --add-dir. */
 export function dirsOn(manifest, machine = null) {
   return manifest.dirs.filter((d) => (d.machine ?? null) === (machine ?? null)).map((d) => d.path);
 }
@@ -205,15 +205,15 @@ export function updateClaudeMd(text, manifest) {
 }
 
 /**
- * The argv to start a member: claude (with the user's own flags), --add-dir for each folder on its machine,
+ * The argv to start an agent: claude (with the user's own flags), --add-dir for each folder on its machine,
  * and the task. Wrapped so the env var is set and the login shell's PATH applies.
  * claudeArgv: the user's claude launch (e.g. from their alias), without "command".
  */
 // The task goes right after the program: --add-dir takes a list, so a task after it would be read as a folder.
-// binDir: put on PATH so members can run `omniloop`.
+// binDir: put on PATH so agents can run `omniloop`.
 // pluginDirs: the loop's projects, each loaded as a Claude Code plugin (its skills and tools).
-// noMemory: a temporary loop's member: these env vars unset and these tools disallowed (core/lifecycle.js).
-export function memberArgv({ shell = "/bin/sh", claudeArgv = ["claude"], dirs = [], task = null, binDir = null, pluginDirs = [], noMemory = null }) {
+// noMemory: a temporary loop's agent: these env vars unset and these tools disallowed (core/lifecycle.js).
+export function agentArgv({ shell = "/bin/sh", claudeArgv = ["claude"], dirs = [], task = null, binDir = null, pluginDirs = [], noMemory = null }) {
   const [prog, ...flags] = claudeArgv;
   const argv = [prog, ...(task ? [task] : []), ...flags];
   for (const p of pluginDirs) argv.push("--plugin-dir", p);

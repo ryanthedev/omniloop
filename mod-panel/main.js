@@ -1,5 +1,5 @@
 // Omniloop panel: a docked, keyboard-driven view of your loops, beside the terminals. Two views:
-//   1 Loop  the current loop: goal(s), your todo, the agents' tasks, members, context (folders, projects)
+//   1 Loop  the current loop: goal(s), your todo, the agents' tasks, agents, context (folders, projects)
 //   2 All   every loop on this machine, plus live ones from other machines; / filters
 // The rules (rows, cursor, keys) are in core/panel.js, tested; this file draws rows and runs actions.
 //
@@ -199,11 +199,11 @@ export default class OmniloopPanel extends View {
       });
       return;
     }
-    if (a.type === "lead") {
+    if (a.type === "coordinator" || a.type === "lead") {
       const id = a.loop ?? ctx.cur;
-      const lead = a.terminal ?? ctx.loops.find((l) => l.id === id)?.lead;
-      if (lead) return run("pane.focus", { terminal: lead });
-      this.note = `${id ?? "this loop"} has no live lead`; return;
+      const coordinator = a.terminal ?? ctx.loops.find((l) => l.id === id)?.coordinator;
+      if (coordinator) return run("pane.focus", { terminal: coordinator });
+      this.note = `${id ?? "this loop"} has no live coordinator`; return;
     }
     if (a.type === "done") {
       const { machine, id } = splitLoop(a.loop);
@@ -270,7 +270,7 @@ export default class OmniloopPanel extends View {
       .child(label);
   }
 
-  // A temporary loop (loop.json "temp": true) goes away once its last member exits.
+  // A temporary loop (loop.json "temp": true) goes away once its last agent exits.
   tempChip(t) {
     return div().flex_none().px(5).h(16).rounded(4).border(1).border_color(t.border ?? t.dim).flex().items_center()
       .text_size(10).text_color(t.dim).child("temp");
@@ -297,12 +297,12 @@ export default class OmniloopPanel extends View {
       case "task": return base(h_flex().py(2).gap(8).items_start())
         .child(div().flex_none().w(40).text_size(10.5).text_color(t.dim).child(r.owner))
         .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child(r.text));
-      case "member": return base(h_flex().id(`pr-${i}-${this.uid}`).py(2).gap(6).items_center().cursor_pointer())
+      case "agent": return base(h_flex().id(`pr-${i}-${this.uid}`).py(2).gap(6).items_center().cursor_pointer())
         .on_click(() => run("pane.focus", { terminal: r.terminal }))
         .child(div().flex_none().w(r.depth * 12))
         .child(div().flex_none().w(7).h(7).rounded(4).bg(this.statusColor(t, r.status)))
         .child(div().flex_none().text_size(10.5).text_color(t.dim).child(r.address))
-        .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.foreground).child(`${r.text}${r.isLead ? " ★" : ""}`))
+        .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.foreground).child(`${r.text}${r.isCoordinator ? " ★" : ""}`))
         .when(Boolean(r.forYou), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.blocked).child(r.forYou)))
         .when(!r.forYou && Boolean(r.ago), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(r.ago)));
       case "dir": case "project": case "notes": {
@@ -357,7 +357,7 @@ export default class OmniloopPanel extends View {
     const title = h_flex().px(10).pt(10).gap(6).items_center()
       .child(div().flex_none().text_size(13).font_semibold().text_color(t.accent).child(ctx.cur ? `◎ ${ctx.cur}` : "No loop"))
       .when(Boolean(cur?.temp), (el) => el.child(this.tempChip(t)))
-      .when(Boolean(cur?.lead), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(`lead ${cur.lead}`)))
+      .when(Boolean(cur?.coordinator), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(`coordinator ${cur.coordinator}`)))
       .when((cur?.needsYou ?? 0) > 0, (el) => el.child(div().flex_1().min_w(0).truncate().text_size(10.5).text_color(t.blocked).child(cur.forYou || `${cur.needsYou} for you`)));
     return v_flex().id(`pl-${this.uid}`).flex_1().min_h(0).overflow_y_scroll().pb(10)
       .child(title)
@@ -375,7 +375,7 @@ export default class OmniloopPanel extends View {
     if (rows[0]?.kind === "empty") return v_flex().flex_1().min_h(0).child(filter).child(this.rowEl(t, rows[0], 0, false, typing));
     const item = (i) => {
       const l = rows[i].loop, sel = i === at;
-      const meta = [l.lead ? `lead ${l.lead}` : l.live ? "you lead" : "no live terminals", l.yours ? `${l.yours} todo` : "", l.agentTasks ? `${l.agentTasks} tasks` : "", l.ago ?? ""].filter(Boolean).join(" · ");
+      const meta = [l.coordinator ? `coordinator ${l.coordinator}` : l.live ? "you coordinate" : "no live terminals", l.yours ? `${l.yours} todo` : "", l.agentTasks ? `${l.agentTasks} tasks` : "", l.ago ?? ""].filter(Boolean).join(" · ");
       return v_flex().id(`pa-${i}-${this.uid}`).h(LOOP_ROW).px(10).justify_center().gap(1)
         .when(sel, (x) => x.bg(typing ? t.accent + "33" : t.hover)).when(sel && typing, (x) => x.border_l(2).border_color(t.accent))
         .child(h_flex().gap(6).items_center()
@@ -441,7 +441,7 @@ export default class OmniloopPanel extends View {
         .on_click((_e, cx) => { this.collapse(); cx.notify(); })
         .child("«"));
     const hint = typing
-      ? (this.s.view === "all" ? "j/k move · ⏎ open · / filter · o lead · tab view · esc back" : "j/k move · ⏎ open/jump · x finish · a/p add · c collapse · esc back")
+      ? (this.s.view === "all" ? "j/k move · ⏎ open · / filter · o coordinator · tab view · esc back" : "j/k move · ⏎ open/jump · x finish · a/p add · c collapse · esc back")
       : "click a row, or focus the panel for keys";
     const foot = v_flex().flex_none().px(10).py(4).gap(1).border_t(1).border_color(t.border ?? t.input)
       .when(Boolean(this.note), (el) => el.child(div().truncate().text_size(11).text_color(t.muted).child(this.note)))

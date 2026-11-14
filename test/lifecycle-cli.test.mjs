@@ -36,8 +36,8 @@ function sandbox() {
 test("rename moves the folder, worktree and branch; the old name links to it; tasks and goals edit", async () => {
   const s = sandbox();
   const r = s.repo("r/app");
-  s.omniloop("new", "first", "--goal", "g1", "--dir", r, "--no-lead");
-  s.omniloop("new", "crud", "--goal", "make crud", "--dir", r, "--no-lead");
+  s.omniloop("new", "first", "--goal", "g1", "--dir", r, "--no-coordinator");
+  s.omniloop("new", "crud", "--goal", "make crud", "--dir", r, "--no-coordinator");
   assert.equal(s.manifest("crud").dirs[0].branch, "crud/work");
   s.omniloop("task", "add", "write it", "--for", "you", "--loop", "crud");
   s.omniloop("task", "add", "test it", "--for", "you", "--loop", "crud");
@@ -76,7 +76,7 @@ test("rename moves the folder, worktree and branch; the old name links to it; ta
   assert.equal(s.manifest("edit").goal, "make crud, all of it");
   assert.match(readFileSync(join(s.home, "loops/edit/feed.jsonl"), "utf8"), /loop renamed: crud → edit/);
 
-  s.omniloop("new", "crud", "--goal", "again", "--no-lead");
+  s.omniloop("new", "crud", "--goal", "again", "--no-coordinator");
   assert.equal(s.manifest("crud").id, "crud");
   assert.ok(!lstatSync(join(s.home, "loops/crud")).isSymbolicLink());
   assert.ok(!existsSync(ckey("crud")) || !lstatSync(ckey("crud")).isSymbolicLink(), "the new crud's sessions don't land in edit's transcripts");
@@ -86,15 +86,15 @@ test("rename moves the folder, worktree and branch; the old name links to it; ta
 test("rm refuses unmerged work, then removes the loop and its worktree but never the repo", async () => {
   const s = sandbox();
   const r = s.repo("r/app");
-  s.omniloop("new", "first", "--goal", "g1", "--dir", r, "--no-lead");
-  s.omniloop("new", "doomed", "--goal", "g2", "--dir", r, "--no-lead");
+  s.omniloop("new", "first", "--goal", "g1", "--dir", r, "--no-coordinator");
+  s.omniloop("new", "doomed", "--goal", "g2", "--dir", r, "--no-coordinator");
   const wt = s.manifest("doomed").dirs[0].worktree;
   writeFileSync(join(wt, "b.txt"), "b\n");
   assert.match(s.fails("rm", "doomed"), /uncommitted/);
   s.sh("git", ["add", "."], wt); s.sh("git", ["commit", "-qm", "b"], wt);
   assert.match(s.fails("rm", "doomed"), /1 commit\(s\) not merged/);
   s.sh("git", ["merge", "-q", "--ff-only", "doomed/work"], r);
-  // hc is down (fake): members can't be checked, so it needs --force.
+  // hc is down (fake): agents can't be checked, so it needs --force.
   assert.match(s.fails("rm", "doomed"), /herdr-core/);
   const out = s.omniloop("rm", "doomed", "--force");
   assert.match(out, /loop doomed deleted/);
@@ -108,7 +108,7 @@ test("rm refuses unmerged work, then removes the loop and its worktree but never
 
 test("a temporary loop keeps no memory: no Engram in CLAUDE.md, and rm purges transcripts and history", async () => {
   const s = sandbox();
-  const out = s.omniloop("new", "--temp", "--no-lead");
+  const out = s.omniloop("new", "--temp", "--no-coordinator");
   const id = out.match(/temporary loop (tmp-[a-z0-9-]+)/)[1];
   const home = join(s.home, "loops", id);
   assert.equal(s.manifest(id).temp, true);
@@ -130,4 +130,26 @@ test("a temporary loop keeps no memory: no Engram in CLAUDE.md, and rm purges tr
   const hist = readFileSync(join(s.home, ".claude/history.jsonl"), "utf8");
   assert.doesNotMatch(hist, /secret/);
   assert.match(hist, /keep/);
+});
+
+test("--no-lead and --lead still work as aliases of --no-coordinator and --coordinator", () => {
+  const s = sandbox();
+  // --no-lead: the loop is made and no coordinator is started (the fake hc would fail it otherwise)
+  s.omniloop("new", "old-flag", "--goal", "g", "--no-lead");
+  s.omniloop("new", "new-flag", "--goal", "g", "--no-coordinator");
+  assert.equal(s.manifest("old-flag").goal, s.manifest("new-flag").goal);
+  // --lead on start: the labels carry both the new and the old coordinator key, and the loop's CLAUDE.md template is used
+  for (const flag of ["--lead", "--coordinator"]) {
+    const dry = JSON.parse(s.omniloop("start", "new-flag", flag, "--dry-run", "--", "sh", "-c", "true"));
+    assert.ok(dry.hc.includes("omniloop.coordinator=1") && dry.hc.includes("omniloop.lead=1"), flag);
+    assert.ok(!dry.hc.some((a) => a.startsWith("omniloop.to=")), `${flag}: a coordinator reports to you`);
+  }
+  assert.match(s.fails("new", "BAD id"), /--no-coordinator/);
+});
+
+test("the coordinator's starting prompt says coordinate, and the command still prints 'coordinator <t> in space <id>' form", () => {
+  const s = sandbox();
+  const out = s.omniloop("new", "prompted", "--goal", "do it", "--dry-run");
+  assert.match(out, /You coordinate the loop prompted/);
+  assert.doesNotMatch(out, /You lead/);
 });

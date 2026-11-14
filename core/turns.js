@@ -73,7 +73,7 @@ export function turnEnd(prev, { address, pid, input, now, entries = null }) {
   // No carry-over: a Stop without a reply must not leave the previous turn's words to be quoted as this one's.
   const text = typeof input.last_assistant_message === "string" ? Array.from(input.last_assistant_message).slice(0, TEXT_MAX).join("") : null;
   const sessionId = input.session_id ?? prev?.sessionId ?? null;
-  // first: this is the session's first turn (a started helper's task). null when an older record can't say.
+  // first: this is the session's first turn (a started subagent's task). null when an older record can't say.
   const first = prev?.endSession != null ? prev.endSession !== sessionId : !Number.isFinite(prev?.endedAt) ? true : null;
   const since = first === true ? null : Number.isFinite(prev?.endedAt) ? prev.endedAt : null;
   return { ...prev, address, pid, sessionId, mode: input.permission_mode ?? prev?.mode ?? null, endedAt: now, text,
@@ -88,8 +88,8 @@ export function turnReport(prev, { input, now }) {
 }
 
 /**
- * Does this hook belong to someone else's record? A \`claude\` started inside a member's terminal inherits its
- * HC_TERMINAL_ID: while the member's session (another session id, a live pid) owns the address, the nested one
+ * Does this hook belong to someone else's record? A \`claude\` started inside an agent's terminal inherits its
+ * HC_TERMINAL_ID: while the agent's session (another session id, a live pid) owns the address, the nested one
  * must not overwrite its records. alive(pid) -> boolean.
  */
 export function foreign(prev, { input, pid }, alive) {

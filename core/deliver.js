@@ -99,7 +99,7 @@ export function resolveTarget(target, sessions, { byAddress = {} } = {}) {
 /**
  * How to deliver: { socket } when the session has a socket, else { hc } when there's an hc address, else { none }.
  * mode: the receiver's recorded permission_mode. A bypass receiver holds peer messages for its person's approval,
- * and claiming "bypass" to skip that gate is not ours to do (omniloop lead, 2026-11-13): it gets hc send instead.
+ * and claiming "bypass" to skip that gate is not ours to do (omniloop coordinator, 2026-11-13): it gets hc send instead.
  */
 export function route({ session, address, mode = null }) {
   const bypass = modeClass(mode) === "bypass";

@@ -7,7 +7,7 @@ const T = (address, status, labels = {}, extra = {}) =>
   ({ address, state: "live", status: typeof status === "string" ? { state: status } : status, labels, turn: 1, created_ms: 0, event_ms: 0, ...extra });
 const L = (extra = {}) => ({ omniloop: "m2", ...extra });
 const base = () => [
-  T("t1", "working", L({ "omniloop.lead": "1" })),
+  T("t1", "working", L({ "omniloop.coordinator": "1" })),
   T("t2", "working", L({ "omniloop.to": "t1" })),
   T("t3", "working", L({ "omniloop.to": "t2" })),
 ];
@@ -19,7 +19,7 @@ test("start is silent: what is already true is not news", () => {
   assert.deepEqual(step(s, ts, 1).actions, []);
 });
 
-test("a blocked member's note waits for its working parent, then goes as one line", () => {
+test("a blocked agent's note waits for its working parent, then goes as one line", () => {
   let s = initState(base(), 0);
   let ts = put(base(), "t3", { status: { state: "blocked", kind: "question", msg: "which db?" } });
   let r = step(s, ts, 1);
@@ -45,7 +45,7 @@ test("never type into a blocked agent", () => {
   assert.ok(!r.actions.some((a) => a.type === "send" && a.to === "t2"));
 });
 
-test("the lead's block is for you, once", () => {
+test("the coordinator's block is for you, once", () => {
   const ts = put(base(), "t1", { status: { state: "blocked", kind: "question" } });
   const r = step(initState(base(), 0), ts, 1);
   assert.equal(r.actions.length, 1);
@@ -80,7 +80,7 @@ test("a stall is told once to the parent, and again only after new progress", ()
   let r = step(initState(base(), 0), base(), STALL_MS - 1);
   assert.equal(Object.keys(r.state.pending).length, 0);
   r = step(r.state, base(), STALL_MS);
-  // t1 (lead) stalled: you; t2 stalled: t1 (held, working); t3: t2 (held).
+  // t1 (coordinator) stalled: you; t2 stalled: t1 (held, working); t3: t2 (held).
   assert.deepEqual(r.actions.map((a) => a.type), ["you"]);
   assert.deepEqual(Object.keys(r.state.pending).sort(), ["t1", "t2"]);
   const again = step(r.state, base(), STALL_MS + 1000);
@@ -102,7 +102,7 @@ test("notes for a gone parent come to you", () => {
 });
 
 test("scoped to one loop: terminals outside it are never touched", () => {
-  const ts = [...put(base(), "t1", { status: { state: "blocked" } }), T("x1", "blocked", { omniloop: "other", "omniloop.lead": "1" }), T("t9", "blocked", {})];
+  const ts = [...put(base(), "t1", { status: { state: "blocked" } }), T("x1", "blocked", { omniloop: "other", "omniloop.coordinator": "1" }), T("t9", "blocked", {})];
   const r = step(initState(base(), 0, { loop: "m2" }), ts, 1, { loop: "m2" });
   assert.deepEqual(r.actions.map((a) => a.alert?.address ?? a.to), ["t1"]);
 });
@@ -134,7 +134,7 @@ test("touchedByYou: only the omniloop.you label changing to a value counts", asy
   assert.equal(touchedByYou(null, a("idle", { "omniloop.you": "1" })), false);
 });
 
-test("joining a loop isn't news: a member that arrives already done is told nothing", () => {
+test("joining a loop isn't news: an agent that arrives already done is told nothing", () => {
   const s0 = initState(base(), 0);
   const joined = [...base(), T("t5", "done", L({ "omniloop.to": "t1" }))];
   assert.deepEqual(step(s0, joined, 1).actions, []);
@@ -146,7 +146,7 @@ test("joining a loop isn't news: a member that arrives already done is told noth
 test("another machine's loop is watched, never typed into: its own watcher tells its agents", () => {
   const R = (extra = {}) => ({ omniloop: "m2", ...extra });
   const remote = () => [
-    T("m1/t1", "idle", R({ "omniloop.lead": "1" })),
+    T("m1/t1", "idle", R({ "omniloop.coordinator": "1" })),
     T("m1/t2", "working", R({ "omniloop.to": "t1" })),
     T("m1/t3", "working", R({ "omniloop.to": "t2", "omniloop.needs": "you" })),
   ];
@@ -162,11 +162,11 @@ test("another machine's loop is watched, never typed into: its own watcher tells
   assert.deepEqual(r.state.pending, { t2: ["t3 finished its turn"] });
 });
 
-// A Claude member at a dialog before its first prompt (folder trust) never reports a status, so no stall fires.
+// A Claude agent at a dialog before its first prompt (folder trust) never reports a status, so no stall fires.
 const starting = (address, labels, extra = {}) =>
   T(address, null, labels, { reported: false, status_ms: null, turn: 0, created_ms: 1000, argv: ["/bin/zsh", "-lc", "exec \"$@\"", "omniloop", "claude", "task"], ...extra });
 
-test("a Claude member that never starts is told to you once, after START_MS, even when it has a parent", () => {
+test("a Claude agent that never starts is told to you once, after START_MS, even when it has a parent", () => {
   let s = initState(base(), 0);
   const ts = [...base(), starting("t4", L({ "omniloop.to": "t2" }))];
   let r = step(s, ts, 1000);                                          // just made: joining isn't news
@@ -207,7 +207,7 @@ test("hold: the same line is held once per agent", () => {
 
 const texts = (r) => r.feed.map((f) => `${f.loop}|${f.entry.from}|${f.entry.text}`);
 
-test("DW-2.1 feed: a block routed to its parent is posted once, as omniloop, in the member's loop", () => {
+test("DW-2.1 feed: a block routed to its parent is posted once, as omniloop, in the agent's loop", () => {
   const ts = put(base(), "t3", { status: { state: "blocked", kind: "question", msg: "which db?" } });
   let r = step(initState(base(), 0), ts, 1);
   assert.deepEqual(texts(r), ["m2|omniloop|t3 blocked (question): which db?"]);
@@ -221,7 +221,7 @@ test("DW-2.1 feed: a block routed to its parent is posted once, as omniloop, in 
 test("DW-2.1 feed: an alert for you is posted once", () => {
   const ts = put(base(), "t1", { status: { state: "blocked", kind: "question", msg: "ship it?" } });
   let r = step(initState(base(), 0), ts, 1);
-  assert.deepEqual(texts(r), ["m2|omniloop|t1 (lead) blocked (question): ship it?"]);
+  assert.deepEqual(texts(r), ["m2|omniloop|t1 (coordinator) blocked (question): ship it?"]);
   assert.deepEqual(step(r.state, ts, 2).feed, []);
 });
 
@@ -244,16 +244,16 @@ test("DW-2.1 feed: a due timer is posted once as 'timer for t3: …' in t3's loo
 });
 
 test("DW-2.1 feed: an undeliverable note is posted (the parent became a shell)", () => {
-  const ts = [T("t1", "working", L({ "omniloop.lead": "1" })), T("t2", null, L({ "omniloop.to": "t1" })), T("t3", "working", L({ "omniloop.to": "t2" }))];
+  const ts = [T("t1", "working", L({ "omniloop.coordinator": "1" })), T("t2", null, L({ "omniloop.to": "t1" })), T("t3", "working", L({ "omniloop.to": "t2" }))];
   const s = initState(ts, 0);
   const r = step(s, put(ts, "t3", { status: { state: "done" } }), 1);
   assert.ok(r.actions.some((a) => a.type === "you" && a.alert.kind === "undeliverable"));
   assert.ok(texts(r).includes("m2|omniloop|for t2 (its parent isn't an agent now): t3 finished its turn"));
 });
 
-test("DW-2.1 feed: nothing for a remote member, a remote loop, or a remote timer target; nothing at initState", () => {
+test("DW-2.1 feed: nothing for a remote agent, a remote loop, or a remote timer target; nothing at initState", () => {
   const remoteLoop = [
-    T("m1/t1", "working", { omniloop: "x", "omniloop.lead": "1" }),
+    T("m1/t1", "working", { omniloop: "x", "omniloop.coordinator": "1" }),
     T("m1/t2", "working", { omniloop: "x", "omniloop.to": "m1/t1" }),
   ];
   const s = initState(remoteLoop, 0, { timers: [{ id: "r", at: 1, to: "m1/t2", text: "x" }] });
@@ -279,7 +279,7 @@ test("DW-2.2 a note: true timer reaches the agent without the timer: prefix, and
   assert.deepEqual(r.feed, []);
 });
 
-test("DW-2.2 a held reply and a member note for the lead go out as one line joined by ' · '", () => {
+test("DW-2.2 a held reply and an agent note for the coordinator go out as one line joined by ' · '", () => {
   const ts = base();
   let s = initState(ts, 0, { timers: [{ id: "n", at: 1, to: "t1", text: "you: hello", note: true }] });
   let r = step(s, put(ts, "t2", { status: { state: "done" } }), 2);   // t1 is working: both held
@@ -290,7 +290,7 @@ test("DW-2.2 a held reply and a member note for the lead go out as one line join
 });
 
 test("DW-2.6 a --loop scoped step leaves another loop's timer in state (so its file stays) and fires its own", () => {
-  const other = [T("t7", "idle", { omniloop: "other", "omniloop.lead": "1" })];
+  const other = [T("t7", "idle", { omniloop: "other", "omniloop.coordinator": "1" })];
   const ts = [...base(), ...other];
   const timers = [{ id: "mine", at: 1, to: "t3", text: "a" }, { id: "theirs", at: 1, to: "t7", text: "b" }];
   const s = initState(ts, 0, { loop: "m2", timers });
@@ -320,8 +320,8 @@ async function watcher(t, args, { timers = [], until = /FEED|SEND|YOU/, settle =
   const bin = join(home, "bin"), cache = join(home, "cache"), loopDir = join(home, "loops", "X");
   await mkdir(bin, { recursive: true }); await mkdir(loopDir, { recursive: true }); await mkdir(join(cache, "timers"), { recursive: true });
   await writeFile(join(loopDir, "loop.json"), JSON.stringify({ id: "X", goal: "g", dirs: [], created_ms: 1 }));
-  const terms = [term("t1", "working", { omniloop: "X", "omniloop.lead": "1" }), term("t2", "working", { omniloop: "X", "omniloop.to": "t1" }), term("t7", "idle", { omniloop: "Y", "omniloop.lead": "1" })];
-  // after the watcher is ready, t2 blocks: its note goes to the working lead t1 (held), and the block is news for the feed
+  const terms = [term("t1", "working", { omniloop: "X", "omniloop.coordinator": "1" }), term("t2", "working", { omniloop: "X", "omniloop.to": "t1" }), term("t7", "idle", { omniloop: "Y", "omniloop.coordinator": "1" })];
+  // after the watcher is ready, t2 blocks: its note goes to the working coordinator t1 (held), and the block is news for the feed
   const events = [[1500, { params: { terminal: "t2", type: "status", data: { status: { state: "blocked", kind: "question", msg: "which db?" } } } }]];
   await writeFile(join(bin, "cfg.json"), JSON.stringify({ terms, events }));
   await writeFile(join(bin, "hc"), `#!/usr/bin/env node
@@ -436,12 +436,12 @@ const NAMES = { spA: "m2", spB: "other", spC: "loose" };
 let tabN = 0; // each call is a tab of its own, unless a test passes the same `htab` to put terminals in one tab
 const SP = (space, labels = {}, tab = "3", htab = `tab${++tabN}`) => ({ "herdr.space": space, "herdr.tab": htab, where: `${NAMES[space]} / ${tab}`, ...labels });
 const room = () => [
-  T("t1", "done", SP("spA", L({ "omniloop.lead": "1" }))),
+  T("t1", "done", SP("spA", L({ "omniloop.coordinator": "1" }))),
   T("t2", "working", SP("spA", L({ "omniloop.to": "t1" }))),
-  T("t9", "done", SP("spB", { omniloop: "other", "omniloop.lead": "1" })),
+  T("t9", "done", SP("spB", { omniloop: "other", "omniloop.coordinator": "1" })),
 ];
 
-test("adopt: a new console in a loop's space joins it, reporting to the lead", () => {
+test("adopt: a new console in a loop's space joins it, reporting to the coordinator", () => {
   const ts = [...room(), T("t5", null, SP("spA", {}, "agy"))];
   const r = adoptions({ t5: 0 }, ts, ADOPT_AFTER_MS);
   assert.deepEqual(r.adopt, [{ address: "t5", loop: "m2", to: "t1", job: "agy" }]);
@@ -451,7 +451,7 @@ test("adopt: a new console in a loop's space joins it, reporting to the lead", (
 });
 
 test("adopt: a pane split of a tab that has other terminals isn't a new tab; a tab id that arrives late still counts", () => {
-  const split = [...room(), T("t5", null, SP("spA", {}, "lead", "tabX")), T("t6", null, SP("spA", L({ "omniloop.lead": "1" }), "lead", "tabX"))];
+  const split = [...room(), T("t5", null, SP("spA", {}, "lead", "tabX")), T("t6", null, SP("spA", L({ "omniloop.coordinator": "1" }), "lead", "tabX"))];
   assert.deepEqual(adoptions({ t5: 0 }, split, ADOPT_AFTER_MS), { adopt: [], keep: {} });
   // A split alone in its tab (the sibling is gone) is just a tab.
   const alone = [...room(), T("t5", null, SP("spA", {}, "lead", "tabX")), T("t6", null, SP("spA", L(), "lead", "tabX"), { state: "finished" })];
@@ -468,12 +468,12 @@ test("whereOf splits on the first ' / ' (a tab name may contain one)", () => {
 test("adopt: waits a moment, so a terminal its maker labels right away is left alone", () => {
   const ts = [...room(), T("t5", null, SP("spA"))];
   assert.deepEqual(adoptions({ t5: 0 }, ts, ADOPT_AFTER_MS - 1), { adopt: [], keep: { t5: 0 } });
-  const labelled = [...room(), T("t5", null, SP("spA", L({ "omniloop.lead": "1" })))];
+  const labelled = [...room(), T("t5", null, SP("spA", L({ "omniloop.coordinator": "1" })))];
   assert.deepEqual(adoptions({ t5: 0 }, labelled, ADOPT_AFTER_MS), { adopt: [], keep: {} });
 });
 
-test("adopt: only the loop's own space (named after it), not a space its members merely sit in", () => {
-  const borrowed = [T("t1", "done", { "herdr.space": "spP", where: "plenary / 1", omniloop: "m2", "omniloop.lead": "1" }),
+test("adopt: only the loop's own space (named after it), not a space its agents merely sit in", () => {
+  const borrowed = [T("t1", "done", { "herdr.space": "spP", where: "plenary / 1", omniloop: "m2", "omniloop.coordinator": "1" }),
     T("t5", null, { "herdr.space": "spP", "herdr.tab": "tabP5", where: "plenary / 5" })];
   assert.deepEqual(adoptions({ t5: 0 }, borrowed, ADOPT_AFTER_MS), { adopt: [], keep: {} });
 });
@@ -484,22 +484,22 @@ test("adopt: a space label that arrives late still counts; a console that never 
   assert.deepEqual(adoptions({ t5: 0 }, bare, ADOPT_WITHIN_MS + 1), { adopt: [], keep: {} });
 });
 
-test("adopt: no loop, two loops, another machine, a helper or a finished console: left alone", () => {
+test("adopt: no loop, two loops, another machine, a subagent or a finished console: left alone", () => {
   const none = [...room(), T("t5", null, SP("spC"))];
   assert.deepEqual(adoptions({ t5: 0 }, none, ADOPT_AFTER_MS).adopt, []);
   const mixed = [...room(), T("t8", "done", SP("spA", { omniloop: "other" })), T("t5", null, SP("spA"))];
   assert.deepEqual(adoptions({ t5: 0 }, mixed, ADOPT_AFTER_MS), { adopt: [], keep: {} });
   const remote = [...room(), T("m1/t5", null, SP("spA"))];
   assert.deepEqual(adoptions({ "m1/t5": 0 }, remote, ADOPT_AFTER_MS).adopt, []);
-  const helper = [...room(), T("t5", null, SP("spA"), { parent: "t1" })];
-  assert.deepEqual(adoptions({ t5: 0 }, helper, ADOPT_AFTER_MS).adopt, []);
+  const subagent = [...room(), T("t5", null, SP("spA"), { parent: "t1" })];
+  assert.deepEqual(adoptions({ t5: 0 }, subagent, ADOPT_AFTER_MS).adopt, []);
   const gone = [...room(), T("t5", null, SP("spA"), { state: "finished" })];
   assert.deepEqual(adoptions({ t5: 0 }, gone, ADOPT_AFTER_MS).adopt, []);
 });
 
-test("adopt: a loop with no lead (you lead it) adopts with no parent; retired members don't claim a space", () => {
-  const nolead = [T("t2", "done", SP("spA", L())), T("t5", null, SP("spA"))];
-  assert.deepEqual(adoptions({ t5: 0 }, nolead, ADOPT_AFTER_MS).adopt, [{ address: "t5", loop: "m2", to: null, job: null }]);
+test("adopt: a loop with no coordinator (you coordinate it) adopts with no parent; retired agents don't claim a space", () => {
+  const nocoordinator = [T("t2", "done", SP("spA", L())), T("t5", null, SP("spA"))];
+  assert.deepEqual(adoptions({ t5: 0 }, nocoordinator, ADOPT_AFTER_MS).adopt, [{ address: "t5", loop: "m2", to: null, job: null }]);
   const retired = [T("t2", "done", SP("spA", L({ "omniloop.retired": "t3" }))), T("t5", null, SP("spA"))];
   assert.deepEqual(adoptions({ t5: 0 }, retired, ADOPT_AFTER_MS).adopt, []);
 });
@@ -514,7 +514,7 @@ test("a finished turn reaches the parent only when it was work given to it, and 
   assert.equal(sent(rec({ you: false, from: ["t2"] })), 1);                 // its parent asked (message or hc send)
   assert.equal(sent(rec({ you: true, from: ["t2"] })), 1);                  // its parent asked, then a person added a line
   assert.equal(sent(rec({ you: false, from: ["omniloop"] })), 1);           // a watcher note or timer woke it
-  assert.equal(sent(rec({ you: true, from: [] }, true)), 1);                // a started helper's task
+  assert.equal(sent(rec({ you: true, from: [] }, true)), 1);                // a started subagent's task
   assert.equal(sent(rec({ you: true, from: [] }, null)), 1);                // can't tell it isn't the task: relay
   assert.equal(sent(rec({ you: false, from: ["devicepool-65"] })), 1);      // a sender known by name, not address: relay
   assert.equal(sent(rec(null)), 1);                                          // no record of who gave it: as before
@@ -523,7 +523,7 @@ test("a finished turn reaches the parent only when it was work given to it, and 
   assert.equal(sent(rec({ you: false, from: ["t7"] })), 0);                 // another session's errand
   assert.equal(sent(rec({ you: true, from: [] }, true), adopted), 0);       // + console: a person's first prompt
   assert.equal(sent(rec({ you: true, from: [] }, null), adopted), 0);
-  assert.equal(sent(rec({ you: true, from: ["t2"] }, null), adopted), 1);   // the lead gave an adopted console work
+  assert.equal(sent(rec({ you: true, from: ["t2"] }, null), adopted), 1);   // the coordinator gave an adopted console work
   // Skipped notes still reach the loop's feed.
   const r = step(s0(), idle2, 1, { turns: { t3: rec({ you: true, from: [] }) } });
   assert.ok(r.feed.some((f) => /t3 finished its turn/.test(JSON.stringify(f.entry))));

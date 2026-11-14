@@ -4,7 +4,7 @@ import { claudeProjectKey, isLoopClaudeEntry, renamedManifest, renameText, withF
 import { addTask, finishTask, editTask, reopenTask, removeTask, tasksOf } from "../core/tasks.js";
 import { setGoal, addGoal, editGoal, openGoals } from "../core/goals.js";
 import { addProject, removeProject } from "../core/projects.js";
-import { removeDir, memberArgv, claudeMd, validId } from "../core/loopdir.js";
+import { removeDir, agentArgv, claudeMd, validId } from "../core/loopdir.js";
 
 test("claude project keys and which entries belong to a loop", () => {
   const key = claudeProjectKey("/Users/r/loops/my-loop");
@@ -55,7 +55,7 @@ test("removeCheck refuses uncommitted or unmerged work unless forced", () => {
   assert.equal(removeCheck([{ ...w[0], dirty: 0, ahead: 0 }]).ok, true);
 });
 
-test("temporary loops end once their last member is gone, or after a day with none", () => {
+test("temporary loops end once their last agent is gone, or after a day with none", () => {
   const now = 10 * TEMP_ORPHAN_MS;
   const ms = [
     { id: "t1", temp: true, created_ms: now - 10 * 60_000 },
@@ -67,7 +67,7 @@ test("temporary loops end once their last member is gone, or after a day with no
   const seen = new Set();
   assert.deepEqual(endedTempLoops(ms, new Set(["t1", "t2", "young"]), seen, now), ["orphan"]);
   assert.deepEqual(endedTempLoops(ms, new Set(["t2"]), seen, now), ["t1", "orphan"]);
-  // a young loop whose member left at once still gets the grace period
+  // a young loop whose agent left at once still gets the grace period
   const s2 = new Set(["young"]);
   assert.deepEqual(endedTempLoops([ms[3]], new Set(), s2, now), []);
   assert.deepEqual(endedTempLoops([ms[3]], new Set(), s2, now - 30_000 + TEMP_GRACE_MS + 1), ["young"]);
@@ -128,14 +128,22 @@ test("projects and folders can be removed", () => {
   assert.equal(removeDir(d, "/c"), d);
 });
 
-test("a temporary loop's members start without Engram, and its CLAUDE.md says so", () => {
-  const argv = memberArgv({ claudeArgv: ["claude"], dirs: ["/r/x"], task: "go", noMemory: { env: ["ENGRAM_TOKEN"], tools: ["mcp__x__memory_ingest"] } });
+test("a temporary loop's agents start without Engram, and its CLAUDE.md says so", () => {
+  const argv = agentArgv({ claudeArgv: ["claude"], dirs: ["/r/x"], task: "go", noMemory: { env: ["ENGRAM_TOKEN"], tools: ["mcp__x__memory_ingest"] } });
   assert.match(argv[2], /unset ENGRAM_TOKEN; /);
   const rest = argv.slice(4);
   assert.deepEqual(rest, ["claude", "go", "--disallowedTools", "mcp__x__memory_ingest", "--add-dir", "/r/x"]);
-  assert.doesNotMatch(memberArgv({ claudeArgv: ["claude"] })[2], /unset/);
+  assert.doesNotMatch(agentArgv({ claudeArgv: ["claude"] })[2], /unset/);
   const md = claudeMd({ id: "t", goal: "g", dirs: [], temp: true });
   assert.match(md, /Temporary loop: no memory/);
   assert.doesNotMatch(md, /engram ingest --event-id/);
   assert.match(claudeMd({ id: "t", goal: "g", dirs: [] }), /engram ingest --event-id t-/);
+});
+
+test("renameText still renames an old-style CLAUDE.md (member of the omniloop `x`)", () => {
+  const old = "# Loop: x\n\nYou are a member of the omniloop `x`. Run `omniloop brief`.\n\n| `omniloop ls x` | who is in this loop |\n";
+  const out = renameText(old, "x", "y");
+  assert.match(out, /^# Loop: y$/m);
+  assert.match(out, /You are a member of the omniloop `y`\./);
+  assert.match(out, /`omniloop ls y`/);
 });

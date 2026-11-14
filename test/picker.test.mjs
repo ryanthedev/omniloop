@@ -16,7 +16,7 @@ test("no query: most recently worked-in first", () => {
 
 test("query: match first, every word must hit, recency breaks ties", () => {
   assert.deepEqual(rank(loops, "plen").map((l) => l.id), ["plenary-m2"]);
-  assert.deepEqual(rank(loops, "parser").map((l) => l.id), ["plenary-m2"]);   // member names count
+  assert.deepEqual(rank(loops, "parser").map((l) => l.id), ["plenary-m2"]);   // agent names count
   assert.deepEqual(rank(loops, "auth bug").map((l) => l.id), ["sec-6096"]);
   assert.deepEqual(rank(loops, "zebra"), []);
   assert.ok(matchScore("ship", "Ship Plenary") > matchScore("shi", "Ship Plenary"));
@@ -64,7 +64,7 @@ test("slugify names links by platform and id", () => {
   assert.equal(slugify("https://youtu.be/dQw4w9WgXcQ", []), "yt-dqw4w9wgxcq");
 });
 
-import { machineRows, newLoopCommand, leadAddress } from "../core/picker.js";
+import { machineRows, newLoopCommand, coordinatorAddress } from "../core/picker.js";
 
 test("a computer that sees no other machines gets no machine rows; one that does picks here or there", () => {
   assert.deepEqual(machineRows([], null), []);
@@ -82,9 +82,14 @@ test("a new loop on another machine runs that machine's own omniloop, passing on
   assert.ok(!there.args.includes("/b"), "this computer's paths stay here");
 });
 
-test("the lead's address from omniloop new's output, qualified by machine when it's elsewhere", () => {
+test("the coordinator's address from omniloop new's output, qualified by machine when it's elsewhere", () => {
   const out = "loop x: /h/loops/x (0 context folders)\nlead t7 in space x\n";
-  assert.equal(leadAddress(out), "t7");
-  assert.equal(leadAddress(out, "m1"), "m1/t7");
-  assert.equal(leadAddress("nothing"), null);
+  assert.equal(coordinatorAddress(out), "t7");
+  assert.equal(coordinatorAddress(out, "m1"), "m1/t7");
+  assert.equal(coordinatorAddress("nothing"), null);
+});
+
+test("coordinatorAddress still reads the old 'lead t7 in space x' line", () => {
+  assert.equal(coordinatorAddress("loop x: /h/loops/x\ncoordinator t7 in space x\n"), "t7");
+  assert.equal(coordinatorAddress("lead t7 in space x (already running)\n", "m1"), "m1/t7");
 });

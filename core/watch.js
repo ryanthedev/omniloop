@@ -4,16 +4,16 @@
 // Token rules this encodes:
 // - Agents never poll, sleep or watch. They end their turn; the watcher wakes them only with something to act on.
 // - Edges, not levels: each block, finish, stall or escalation is told once (keyed by address, kind, turn).
-// - Notes for one agent are held while it works and sent as one line when it stops, so a busy lead
-//   gets one wake-up for many members, not one each.
+// - Notes for one agent are held while it works and sent as one line when it stops, so a busy coordinator
+//   gets one wake-up for many agents, not one each.
 
-import { buildLoops, alerts, trackBlocked, statusOf, loopKey, machineOf, LABEL } from "./omniloop.js";
+import { buildLoops, alerts, trackBlocked, statusOf, loopKey, machineOf, isCoordinatorLabeled, LABEL } from "./omniloop.js";
 import { feedEntry } from "./feed.js";
 import { alreadyReported, turnText } from "./deliver.js";
 
 /** Working with no event for this long counts as stalled (also catches a session stuck at a dialog). */
 export const STALL_MS = 20 * 60 * 1000;
-/** A Claude member that hasn't reported this long after it was made is stuck before its first prompt
+/** A Claude agent that hasn't reported this long after it was made is stuck before its first prompt
  *  (Claude Code's folder-trust question, a login, an update prompt): it never reaches "working", so no stall fires. */
 export const START_MS = 60 * 1000;
 /** Longest message text carried into a note. */
@@ -43,18 +43,18 @@ function routed(terminals, state, now) {
   const byAddr = new Map(terminals.map((t) => [t.address, t]));
   const out = alerts({ loops: built.loops, loose: [] }, { now, blockedSince: state.blockedSince });
 
-  // Stalls: working, no event for STALL_MS. Routed like a block (parent, else lead, else you).
+  // Stalls: working, no event for STALL_MS. Routed like a block (parent, else coordinator, else you).
   for (const loop of built.loops)
-    for (const m of loop.members) {
+    for (const m of loop.agents) {
       if (m.status !== "working") continue;
       const last = m.terminal.event_ms ?? m.terminal.status_ms ?? null;
       if (last == null || now - last < STALL_MS) continue;
-      const to = m.isLead || !loop.lead ? "you" : m.parent ?? loop.lead;
+      const to = m.isCoordinator || !loop.coordinator ? "you" : m.parent ?? loop.coordinator;
       out.push({ address: m.address, loop: loop.id, to, kind: "stalled", why: `no progress for ${Math.round((now - last) / 60000)} min`, last });
     }
   // Stuck at start: always yours (trusting a folder or logging in is your decision), keyed by when it was made.
   for (const loop of built.loops)
-    for (const m of loop.members) {
+    for (const m of loop.agents) {
       const t = m.terminal;
       if (!startingClaude(t) || t.created_ms == null || now - t.created_ms < START_MS) continue;
       out.push({ address: m.address, loop: loop.id, to: "you", kind: "stuck", why: "Claude Code hasn't started; it may be asking a question (folder trust?)", last: t.created_ms });
@@ -72,7 +72,7 @@ export function startingClaude(t) {
 /** Start from what is true now without telling anyone about it (no flood of old "done"s). */
 export function initState(terminals, now, { loop = null, timers = [] } = {}) {
   const ts = scoped(terminals, loop);
-  const state = { told: {}, pending: {}, timers, blockedSince: trackBlocked({}, ts, now), members: ts.map((t) => t.address) };
+  const state = { told: {}, pending: {}, timers, blockedSince: trackBlocked({}, ts, now), agents: ts.map((t) => t.address) };
   const { byAddr, out } = routed(ts, state, now);
   for (const a of out) state.told[keyOf(a, a.kind === "stalled" || a.kind === "stuck" ? a.last : byAddr.get(a.address)?.turn)] = true;
   return state;
@@ -80,7 +80,7 @@ export function initState(terminals, now, { loop = null, timers = [] } = {}) {
 
 // A finished turn carries the agent's own last reply (from its Stop hook's turn record), not just "finished".
 function line(a, t, rec) {
-  const role = t?.labels?.[LABEL.lead] ? " (lead)" : "";
+  const role = isCoordinatorLabeled(t?.labels) ? " (coordinator)" : "";
   const msg = t?.status && typeof t.status === "object" ? t.status.msg : t?.message;
   const what = a.kind === "blocked" ? `blocked${t?.status?.kind ? ` (${t.status.kind})` : ""}` : a.kind === "stalled" ? `stalled, ${a.why}` : a.kind === "stuck" ? `stuck at start: ${a.why}` : "finished its turn";
   const reply = a.kind === "done" ? lastReply(rec) : null;
@@ -99,7 +99,7 @@ const ADDRESS = /^(t[0-9a-z]+|s-[A-Za-z0-9_-]{1,8})$/;
 
 /**
  * Is a finished turn news for its parent? Only work it was given. When in doubt it is: a note is suppressed only
- * when the turn record positively says the turn came from a person typing in it (not a started helper's first
+ * when the turn record positively says the turn came from a person typing in it (not a started subagent's first
  * prompt, its task) and/or from other sessions known by address. A turn a person typed is already on their
  * screen, and another session's errand goes back to that session; waking an idle parent for them costs a whole
  * turn, often on a cold prompt cache, so they go to the loop feed only.
@@ -109,7 +109,7 @@ export function worthTelling(rec, to, t) {
   const g = rec?.given;
   if (!g) return true;                                              // unknown who gave it: as before
   if (g.from.some((f) => f === "omniloop" || f === String(to) || !ADDRESS.test(f))) return true;
-  // A person's prompt counts only as a started helper's task (its first turn, or can't tell). An adopted console
+  // A person's prompt counts only as a started subagent's task (its first turn, or can't tell). An adopted console
   // has no task: its prompts are all a person's.
   if (g.you && rec.first !== false && !t?.labels?.[ADOPTED]) return true;
   return false;
@@ -137,7 +137,7 @@ function lastReply(rec) {
  * actions: [{ type: "send", to, text, if }]   a note for an agent that has stopped (`if`: hc send --if)
  *          [{ type: "you", alert, text }]      newly for you (the view plays the sound for these)
  * you: every alert currently for you (the view lists them)
- * feed: [{ loop, entry }] what to post to each loop's chat feed, once (never for another machine's members or loops)
+ * feed: [{ loop, entry }] what to post to each loop's chat feed, once (never for another machine's agents or loops)
  * opts.loop also scopes timers: only those aimed at a terminal in that loop fire; the rest stay untouched.
  */
 export function step(prev, terminals, now, { loop = null, turns = {} } = {}) {
@@ -147,7 +147,7 @@ export function step(prev, terminals, now, { loop = null, turns = {} } = {}) {
     pending: Object.fromEntries(Object.entries(prev.pending ?? {}).map(([k, v]) => [k, [...v]])),
     timers: [...(prev.timers ?? [])],
     blockedSince: trackBlocked(prev.blockedSince, ts, now),
-    members: ts.map((t) => t.address),
+    agents: ts.map((t) => t.address),
   };
   const { byAddr, out } = routed(ts, state, now);
   const actions = [], feed = [];
@@ -157,7 +157,7 @@ export function step(prev, terminals, now, { loop = null, turns = {} } = {}) {
     if (r.entry) feed.push({ loop: loopId, entry: r.entry });
   };
   // A terminal that just joined a loop brings its state with it: joining isn't news (no flood of old "done"s).
-  const before = new Set(prev.members ?? ts.map((t) => t.address));
+  const before = new Set(prev.agents ?? prev.members ?? ts.map((t) => t.address));
   for (const a of out)
     if (!before.has(a.address)) state.told[keyOf(a, a.kind === "stalled" || a.kind === "stuck" ? a.last : byAddr.get(a.address)?.turn)] = true;
 
@@ -264,7 +264,7 @@ export function withoutReplies(text) {
 }
 
 /** A new console waits this long before it's adopted, so a terminal its maker labels right after making it
- *  (`omniloop new` starting a lead with `tab.new`, then labelling it) is left alone. */
+ *  (`omniloop new` starting a coordinator with `tab.new`, then labelling it) is left alone. */
 export const ADOPT_AFTER_MS = 3 * 1000;
 /** A new console not adoptable by then (no space label, a space with no loop) is dropped from the candidates. */
 export const ADOPT_WITHIN_MS = 60 * 1000;
@@ -278,12 +278,12 @@ export function whereOf(t) {
 
 /**
  * A console made in a loop's own space (Herdr's + menu: `tab.new`, which sets no omniloop labels) joins that loop,
- * reporting to its lead. Only new consoles (`candidates`: address -> when the watcher saw it created), so what was
+ * reporting to its coordinator. Only new consoles (`candidates`: address -> when the watcher saw it created), so what was
  * already open is never swept in, and `omniloop leave` sticks. A loop's own space is the one named after it, and
- * every live, labelled member on this machine in it must belong to that loop. Only a terminal alone in its tab is
+ * every live, labelled agent on this machine in it must belong to that loop. Only a terminal alone in its tab is
  * adopted (a new tab, not a ⌘D split or the leader's scrollback split of a tab that already has terminals): no other
  * live terminal shares its `herdr.tab`. Returns { adopt: [{ address, loop,
- * to, job }], keep: candidates still waiting }. `to` is null when the loop has no lead (you lead it); `job` is the
+ * to, job }], keep: candidates still waiting }. `to` is null when the loop has no coordinator (you coordinate it); `job` is the
  * tab's name unless Herdr only numbered it.
  */
 export function adoptions(candidates, terminals, now) {
@@ -306,7 +306,7 @@ export function adoptions(candidates, terminals, now) {
     const loop = [...loops][0];
     if (loop !== where.space) continue;
     const job = where.tab && !/^\d+$/.test(where.tab) ? where.tab : null;
-    adopt.push({ address, loop, to: built.loops.find((l) => l.id === loop)?.lead ?? null, job });
+    adopt.push({ address, loop, to: built.loops.find((l) => l.id === loop)?.coordinator ?? null, job });
   }
   return { adopt, keep };
 }

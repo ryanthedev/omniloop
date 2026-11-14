@@ -154,7 +154,7 @@ else process.exit(1);
 `);
   await chmod(join(dir, "hc"), 0o755);
 }
-const lead = (status, extra = {}) => ({ address: "t1", state: "live", status: status && { state: status }, labels: { omniloop: "X", "omniloop.lead": "1" }, turn: 1, ...extra });
+const coordinator = (status, extra = {}) => ({ address: "t1", state: "live", status: status && { state: status }, labels: { omniloop: "X", "omniloop.coordinator": "1" }, turn: 1, ...extra });
 
 async function cli(t, cfg = { terms: [] }) {
   const s = await scratch(t);
@@ -170,7 +170,7 @@ async function cli(t, cfg = { terms: [] }) {
 }
 const brief = (f) => f.map(({ from, text }) => `${from}: ${text}`);
 
-test("DW-2.2 replyPlan: idle sends guarded, done sends, working/blocked/shell hold, no or remote lead is none", () => {
+test("DW-2.2 replyPlan: idle sends guarded, done sends, working/blocked/shell hold, no or remote coordinator is none", () => {
   assert.deepEqual(replyPlan("t1", "idle"), { send: { if: "idle" } });
   assert.deepEqual(replyPlan("t1", "done"), { send: { if: null } });
   assert.deepEqual(replyPlan("t1", "working"), { hold: true });
@@ -209,8 +209,8 @@ test("a failed goal or task command posts nothing", async (t) => {
   assert.deepEqual(await c.feedOf(), []);
 });
 
-test("reply to an idle lead: posted as you (thread kept), sent now with --if idle, nothing held", async (t) => {
-  const c = await cli(t, { terms: [lead("idle")] });
+test("reply to an idle coordinator: posted as you (thread kept), sent now with --if idle, nothing held", async (t) => {
+  const c = await cli(t, { terms: [coordinator("idle")] });
   const { stdout } = await c.cmd(["reply", "do it\nnow", "--loop", "X", "--thread", "plan"]);
   assert.match(stdout, /^sent to t1/);
   assert.deepEqual((await c.feedOf()).map(({ from, thread, text }) => ({ from, thread, text })), [{ from: "you", thread: "plan", text: "do it\nnow" }]);
@@ -218,14 +218,14 @@ test("reply to an idle lead: posted as you (thread kept), sent now with --if idl
   assert.deepEqual(await c.timers(), []);
 });
 
-test("reply to a done lead: sent with no idle guard", async (t) => {
-  const c = await cli(t, { terms: [lead("done")] });
+test("reply to a done coordinator: sent with no idle guard", async (t) => {
+  const c = await cli(t, { terms: [coordinator("done")] });
   await c.cmd(["reply", "hello", "--loop", "X"]);
   assert.deepEqual(await c.sends(), [["send", "t1", "you: hello"]]);
 });
 
-test("DW-2.2 reply to a working lead is held as a due-now note timer, and says no watcher is running", async (t) => {
-  const c = await cli(t, { terms: [lead("working")] });
+test("DW-2.2 reply to a working coordinator is held as a due-now note timer, and says no watcher is running", async (t) => {
+  const c = await cli(t, { terms: [coordinator("working")] });
   const before = Date.now();
   const { stdout } = await c.cmd(["reply", "hello", "--loop", "X"]);
   assert.match(stdout, /^held for t1; no watcher is running/);
@@ -239,7 +239,7 @@ test("DW-2.2 reply to a working lead is held as a due-now note timer, and says n
 });
 
 test("reply held with a live watcher: no 'waits for a watcher' line; a stale or dead watcher doesn't count", async (t) => {
-  const c = await cli(t, { terms: [lead("blocked")] });
+  const c = await cli(t, { terms: [coordinator("blocked")] });
   await mkdir(c.cache, { recursive: true });
   const state = join(c.cache, "state-X.json");
   await writeFile(state, JSON.stringify({ pid: process.pid, heartbeat: Date.now() }));
@@ -257,34 +257,34 @@ test("reply held with a live watcher: no 'waits for a watcher' line; a stale or 
   assert.equal((await c.timers()).length, 4);
 });
 
-test("reply to a plain-shell lead (no status) is held, never typed", async (t) => {
-  const c = await cli(t, { terms: [lead(null)] });
+test("reply to a plain-shell coordinator (no status) is held, never typed", async (t) => {
+  const c = await cli(t, { terms: [coordinator(null)] });
   const { stdout } = await c.cmd(["reply", "hi", "--loop", "X"]);
   assert.match(stdout, /^held for t1/);
   assert.deepEqual(await c.sends(), []);
   assert.equal((await c.timers()).length, 1);
 });
 
-test("reply with no lead running appends the omniloop line and exits 0", async (t) => {
+test("reply with no coordinator running appends the omniloop line and exits 0", async (t) => {
   const c = await cli(t, { terms: [{ address: "t2", state: "live", status: { state: "idle" }, labels: { omniloop: "X" }, turn: 1 }] });
   const { stdout } = await c.cmd(["reply", "anyone?", "--loop", "X"]);
-  assert.match(stdout, /no lead is running in X; nobody got this/);
-  assert.deepEqual(brief(await c.feedOf()), ["you: anyone?", "omniloop: no lead is running; nobody got this"]);
+  assert.match(stdout, /no coordinator is running in X; nobody got this/);
+  assert.deepEqual(brief(await c.feedOf()), ["you: anyone?", "omniloop: no coordinator is running; nobody got this"]);
   assert.deepEqual(await c.sends(), []);
 });
 
-test("reply never sends to another machine's lead", async (t) => {
-  const c = await cli(t, { terms: [{ ...lead("idle"), address: "m1/t1", labels: { omniloop: "X", "omniloop.lead": "1" } }] });
+test("reply never sends to another machine's coordinator", async (t) => {
+  const c = await cli(t, { terms: [{ ...coordinator("idle"), address: "m1/t1", labels: { omniloop: "X", "omniloop.coordinator": "1" } }] });
   const { stdout } = await c.cmd(["reply", "hi", "--loop", "X"]);
-  assert.match(stdout, /no lead is running/);
+  assert.match(stdout, /no coordinator is running/);
   assert.deepEqual(await c.sends(), []);
 });
 
 test("reply: hc send that typed the note then failed to save counts as sent; a refusal is held", async (t) => {
-  const c = await cli(t, { terms: [lead("idle")], sendExit: 1, sendOut: "cannot save terminals: registry writer stopped" });
+  const c = await cli(t, { terms: [coordinator("idle")], sendExit: 1, sendOut: "cannot save terminals: registry writer stopped" });
   assert.match((await c.cmd(["reply", "a", "--loop", "X"])).stdout, /^sent to t1/);
   assert.equal((await c.timers()).length, 0);
-  await c.cfg({ terms: [lead("idle")], sendExit: 1, sendOut: "refused: not idle" });
+  await c.cfg({ terms: [coordinator("idle")], sendExit: 1, sendOut: "refused: not idle" });
   assert.match((await c.cmd(["reply", "b", "--loop", "X"])).stdout, /^held for t1/);
   assert.equal((await c.timers()).length, 1);
 });
@@ -296,7 +296,7 @@ test("reply with herdr-core down: the reply stays in the feed, a line says it wa
 });
 
 test("reply refuses: empty text, no loop folder, bad id, thread without a value; nothing is written", async (t) => {
-  const c = await cli(t, { terms: [lead("idle")] });
+  const c = await cli(t, { terms: [coordinator("idle")] });
   for (const args of [["   ", "--loop", "X"], ["hi", "--loop", "nope"], ["hi", "--loop", "../X"], ["hi", "--loop", "X", "--thread"], ["--loop", "X"]])
     await assert.rejects(c.cmd(["reply", ...args]), (err) => err.code === 1 && /omniloop:/.test(err.stderr), args.join(" "));
   assert.deepEqual(await c.feedOf(), []);
@@ -304,7 +304,7 @@ test("reply refuses: empty text, no loop folder, bad id, thread without a value;
 });
 
 test("reply: a dry-run watcher's state file does not count as a running watcher", async (t) => {
-  const c = await cli(t, { terms: [lead("working")] });
+  const c = await cli(t, { terms: [coordinator("working")] });
   await mkdir(c.cache, { recursive: true });
   const fresh = JSON.stringify({ pid: process.pid, heartbeat: Date.now(), loop: "X", dryRun: true });
   await writeFile(join(c.cache, "dry-X.json"), fresh);

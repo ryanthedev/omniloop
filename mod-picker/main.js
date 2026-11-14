@@ -2,7 +2,7 @@
 //
 //   ask      Your loops: pinned ones first (numbered), then the ones you talked to most recently. Typing
 //            fuzzy-searches everything (name, goal, sessions, folders, projects, tasks, recent chat). Enter opens a
-//            loop (jumps to its lead); ⌘P pins or unpins it; ⌘↑/⌘↓ moves a pin; ⌘↵ (or the last row) starts a new loop.
+//            loop (jumps to its coordinator); ⌘P pins or unpins it; ⌘↑/⌘↓ moves a pin; ⌘↵ (or the last row) starts a new loop.
 //   machine  New loop: which machine (only when this computer sees others).
 //   goal     New loop: what it's for. Loops that might already cover it show underneath; Enter on one opens it.
 //   context  New loop: search and Tab to add projects and folders (the goal pre-ticks matching ones).
@@ -10,14 +10,14 @@
 //            edit either, Enter creates.
 //
 // Opened by a key (keys.json: "mod.open:omniloop-picker"); mod.json makes it a full-window dialog. Another mod
-// can open it as a 2×2 frameless popup with props { action: "jump", slot } to jump to a pinned loop's lead and
+// can open it as a 2×2 frameless popup with props { action: "jump", slot } to jump to a pinned loop's coordinator and
 // close (the leader's harpoon keys).
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { terminals, theme, run, exec, home, readTextFile, props, closeOverlay, shared, setShared, notify, nextCommand } from "herdr";
 import { buildView, ago } from "./core/view.js";
-import { folderRows, projectRows, machineRows, newLoopCommand, leadAddress, clampAt, loopEntries, pickerRows, suggestLoops, screenLines, screenLabel, LOCAL_NAME } from "./core/picker.js";
+import { folderRows, projectRows, machineRows, newLoopCommand, coordinatorAddress, clampAt, loopEntries, pickerRows, suggestLoops, screenLines, screenLabel, LOCAL_NAME } from "./core/picker.js";
 import { matchProjects, strongMatches } from "./core/projects.js";
 import { PINS_KEY, sanitizePins, togglePin, movePin, pinTo } from "./core/pins.js";
 import { cleanId, fallbackProposal } from "./core/intake.js";
@@ -125,31 +125,31 @@ export default class OmniloopPicker extends View {
   open(entry, cx) {
     if (entry.placeholder) { this.error = entry.placeholder === "loading" ? (this.stillReadingKey = entry.key, STILL_READING(entry.key)) : "Couldn't read your loop folders, so this pin can't be opened from here."; cx?.notify(); return; }
     if (entry.stale) { this.error = `Pinned at ${entry.pin}, but ${entry.key} isn't found${entry.machine ? ` (nobody is running in it on ${entry.machine})` : ""}. ⌘P unpins it.`; cx?.notify(); return; }
-    if (entry.lead) { this.close(); run("pane.focus", { terminal: entry.lead }); return; }
-    // Nobody is running in it: start a fresh lead that catches up from the loop's notes (omniloop revive).
+    if (entry.coordinator) { this.close(); run("pane.focus", { terminal: entry.coordinator }); return; }
+    // Nobody is running in it: start a fresh coordinator that catches up from the loop's notes (omniloop revive).
     // Only this computer's loops: another machine's loop is never started or read from here.
     if (entry.machine) { this.error = `Nobody is running in ${entry.key}; start it on ${entry.machine}.`; cx?.notify(); return; }
     if (this.reviving) return;
-    this.reviving = entry.id; this.error = `Starting a fresh lead in ${entry.id}…`; cx?.notify();
+    this.reviving = entry.id; this.error = `Starting a fresh coordinator in ${entry.id}…`; cx?.notify();
     cx?.spawn(async (cx) => {
       try {
         const r = await exec(`${BIN}/omniloop`, ["revive", entry.id], { timeout: 60000 });
-        const lead = r.code === 0 ? leadAddress(r.stdout) : null;
-        if (lead) { this.close(); run("pane.focus", { terminal: lead }); return; }
+        const coordinator = r.code === 0 ? coordinatorAddress(r.stdout) : null;
+        if (coordinator) { this.close(); run("pane.focus", { terminal: coordinator }); return; }
         this.error = (r.stderr || r.stdout || `omniloop revive exited ${r.code}`).trim();
       } catch (e) { this.error = String(e?.message ?? e); }
       this.reviving = null; cx.notify();
     });
   }
 
-  /** Jump to pin `slot`'s lead and close (the popup the leader opens). */
+  /** Jump to pin `slot`'s coordinator and close (the popup the leader opens). */
   jumpTo(slot) {
     const key = this.pins()[slot - 1];
     const entry = key ? loopEntries(buildView(terminals(), null, Date.now()).loops, [], this.pins(), this.localName).find((e) => e.key === key) : null;
     this.close();
     if (!key) return notify({ title: "Omniloop", body: `No loop pinned at ${slot}`, level: "warning", timeout: 1800 });
-    if (!entry?.lead) return notify({ title: "Omniloop", body: `${slot} · ${key}: nobody is running in it`, level: "warning", timeout: 2500 });
-    run("pane.focus", { terminal: entry.lead });
+    if (!entry?.coordinator) return notify({ title: "Omniloop", body: `${slot} · ${key}: nobody is running in it`, level: "warning", timeout: 2500 });
+    run("pane.focus", { terminal: entry.coordinator });
   }
 
   selected() { const rows = this.rows(); return rows[clampAt(this.at, rows.length)]; }
@@ -348,8 +348,8 @@ export default class OmniloopPicker extends View {
         const r = await exec(cmd, args, { timeout: 60000 });
         if (r.code === 0) {
           this.close();
-          const lead = machine ? leadAddress(r.stdout, machine) : null;
-          if (lead) run("pane.focus", { terminal: lead });
+          const coordinator = machine ? coordinatorAddress(r.stdout, machine) : null;
+          if (coordinator) run("pane.focus", { terminal: coordinator });
           return;
         }
         this.error = (r.stderr || r.stdout || `omniloop new exited ${r.code}`).trim();
@@ -402,8 +402,8 @@ export default class OmniloopPicker extends View {
 
   loopRow(t, r, on, i) {
     const e = r.entry;
-    const n = e.members.length;
-    const when = e.placeholder ? "" : e.stale ? "not found · ⌘P unpins" : e.running ? (e.ago ? `you ${e.ago}` : "you: never") : (e.touched ? `idle ${ago(e.touched, Date.now())} · Enter starts a lead` : "idle · Enter starts a lead");
+    const n = e.agents.length;
+    const when = e.placeholder ? "" : e.stale ? "not found · ⌘P unpins" : e.running ? (e.ago ? `you ${e.ago}` : "you: never") : (e.touched ? `idle ${ago(e.touched, Date.now())} · Enter starts a coordinator` : "idle · Enter starts a coordinator");
     return h_flex().id(`pk-${e.key}`).h(60).px(18).gap(14).items_center().rounded(12).cursor_pointer()
       .bg(on ? t.raised : t.background).border(1).border_color(on ? t.accent : t.background)
       .on_hover((h, cx) => this.hover(h ? e : null, e.key, cx))
@@ -449,17 +449,17 @@ export default class OmniloopPicker extends View {
   // ---- hover preview ----
 
   /** The pointer entered (entry) or left (null) loop row `key`. Leaving one row only clears its own preview, so moving
-   *  between rows never flickers. The lead's screen is read once a second at most per loop. */
+   *  between rows never flickers. The coordinator's screen is read once a second at most per loop. */
   hover(entry, key, cx) {
     if (this.step !== "ask") return;
     if (!entry) { if (this.hovered === key) { this.hovered = null; cx.notify(); } return; }
     this.hovered = key; cx.notify();
-    const lead = entry.lead, seen = this.screens?.[key];
-    if (!lead || (seen && Date.now() - seen.at < 1000)) return;
+    const coordinator = entry.coordinator, seen = this.screens?.[key];
+    if (!coordinator || (seen && Date.now() - seen.at < 1000)) return;
     this.screens = { ...(this.screens ?? {}), [key]: { at: Date.now(), lines: seen?.lines ?? null } };
     cx.spawn(async (cx) => {
       try {
-        const r = await exec(this.hc(), ["read", lead], { timeout: 4000 });
+        const r = await exec(this.hc(), ["read", coordinator], { timeout: 4000 });
         this.screens[key] = { at: Date.now(), lines: r.code === 0 ? screenLines(r.stdout) : false };
       } catch { this.screens[key] = { at: Date.now(), lines: false }; }
       cx.notify();
@@ -472,7 +472,7 @@ export default class OmniloopPicker extends View {
     return rows.find((r) => r.kind === "loop" && r.entry.key === this.hovered)?.entry ?? null;
   }
 
-  /** The preview card for the hovered loop: goal, sessions with their status, recent chat, the lead's screen. */
+  /** The preview card for the hovered loop: goal, sessions with their status, recent chat, the coordinator's screen. */
   preview(t, e) {
     const live = this.view().loops.find((l) => l.id === e.key);
     const rows = live?.rows ?? [];
@@ -488,11 +488,11 @@ export default class OmniloopPicker extends View {
         h_flex().gap(8).items_center().pl(m.depth * 12)
           .child(this.dot(t, m.status, true))
           .child(div().text_size(10.5).text_color(t.dim).child(m.address))
-          .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.foreground).child(`${m.name}${m.isLead ? " ★" : ""}`))
+          .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.foreground).child(`${m.name}${m.isCoordinator ? " ★" : ""}`))
           .when(Boolean(m.forYouLabel), (x) => x.child(div().text_size(11).text_color(t.blocked).child(m.forYouLabel))))))
       .when(e.tasks.length > 0, (el) => el.child(label("OPEN TASKS")).children(e.tasks.slice(0, 3).map((x) => div().truncate().text_size(12).text_color(t.muted).child(`· ${x}`))))
       .when(e.feed.length > 0, (el) => el.child(label("RECENT CHAT")).children(e.feed.slice(-3).map((x) => div().truncate().text_size(12).text_color(t.muted).child(x))))
-      .when(Boolean(e.lead), (el) => el.child(label(screenLabel(Boolean(live?.lead), e.lead)))
+      .when(Boolean(e.coordinator), (el) => el.child(label(screenLabel(Boolean(live?.coordinator), e.coordinator)))
         .child(v_flex().p(8).rounded(8).bg(t.background).overflow_hidden().children(screen == null
           ? [div().text_size(11).text_color(t.dim).child("Reading…")]
           : screen === false ? [div().text_size(11).text_color(t.dim).child("Couldn't read the screen")]
@@ -527,7 +527,7 @@ export default class OmniloopPicker extends View {
       case "goal": return "Enter continue (or open a suggested loop) · Esc back";
       case "context": return `↑↓ move · Tab add or remove · Enter next with ${this.pickedProjects.length ? `${this.pickedProjects.join(", ")} + ` : ""}${this.picked.length} folder${this.picked.length === 1 ? "" : "s"} · Esc back`;
       case "review": return f?.pending && !f.edited ? "Naming it…" : "↑↓ folder or goal · type to edit · Enter create · Esc back";
-      case "creating": return `Creating the loop, its space and its lead${this.machine ? ` on ${this.machine}` : ""}…`;
+      case "creating": return `Creating the loop, its space and its coordinator${this.machine ? ` on ${this.machine}` : ""}…`;
       default: return "↑↓ move · Enter open · ⌘P pin · ⌘1-9 pin to slot · ⌘↵ new loop · Esc close";
     }
   }

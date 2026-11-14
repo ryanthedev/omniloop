@@ -10,9 +10,9 @@ import { createInterface } from "node:readline";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { LABEL, buildLoops, statusOf } from "../core/omniloop.js";
+import { LABEL, COORDINATOR_KEYS, isCoordinatorLabeled, buildLoops, statusOf } from "../core/omniloop.js";
 import { initState, step, parseDuration, touchedByYou, sendFailed, hold, withoutReplies, adoptions, ADOPT_AFTER_MS, ADOPTED } from "../core/watch.js";
-import { validId, loopHome, newManifest, addDir, removeDir, dirsOn, launchDirsOn, worktreeChoice, worktreeTarget, worktreeBranch, setWorktree, overlaps, claudeMd, updateClaudeMd, memberArgv, parseAliasWords, sharedWith, LOOPS_DIR } from "../core/loopdir.js";
+import { validId, loopHome, newManifest, addDir, removeDir, dirsOn, launchDirsOn, worktreeChoice, worktreeTarget, worktreeBranch, setWorktree, overlaps, claudeMd, updateClaudeMd, agentArgv, parseAliasWords, sharedWith, LOOPS_DIR } from "../core/loopdir.js";
 import { matchProjects, addProject, removeProject, projectLaunch, withProjectsBlock } from "../core/projects.js";
 import { goalsOf, openGoals, setGoal, addGoal, finishGoal, editGoal, withGoalBlock, goalNote } from "../core/goals.js";
 import { feedEntry, feedLine, parseFeed, replyPlan, FEED_FILE } from "../core/feed.js";
@@ -42,7 +42,7 @@ async function hc(args, { json = true } = {}) {
 }
 const me = () => process.env.HC_TERMINAL_ID || null;
 const SHELL = process.env.SHELL || "/bin/sh";
-// This folder holds the `omniloop` command; members get it on their PATH.
+// This folder holds the `omniloop` command; agents get it on their PATH.
 const BIN = dirname(fileURLToPath(import.meta.url));
 const LOOPS = join(homedir(), "loops");
 
@@ -87,8 +87,8 @@ async function loadProjects() {
   return out;
 }
 
-/** The loop's context folders plus its projects' repos and plugin folders, for a member on this computer. */
-// omniloop's own plugin (its goal hook) goes to every member started in a loop with a folder.
+/** The loop's context folders plus its projects' repos and plugin folders, for an agent on this computer. */
+// omniloop's own plugin (its goal hook) goes to every agent started in a loop with a folder.
 const PLUGIN = join(BIN, "..", "plugin");
 
 async function launchOf(manifest) {
@@ -131,14 +131,16 @@ function splitTask(argv) {
 function die(msg) { console.error(`omniloop: ${msg}`); process.exit(1); }
 
 // Flags that never take a value, so `--json some text` keeps the text.
-const BOOL = new Set(["json", "dry-run", "lead", "no-lead", "temp", "force", "purge", "auto"]);
+const BOOL = new Set(["json", "dry-run", "coordinator", "no-coordinator", "temp", "force", "purge", "auto"]);
+// Old flag names, still accepted (silently) as aliases of the new ones.
+const FLAG_ALIAS = { lead: "coordinator", "no-lead": "no-coordinator" };
 function parseArgs(argv) {
   const flags = {}, rest = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--") { rest.push(...argv.slice(i + 1)); flags["--"] = true; break; }
     if (a.startsWith("--")) {
-      const k = a.slice(2);
+      const k = FLAG_ALIAS[a.slice(2)] ?? a.slice(2);
       const v = argv[i + 1];
       if (BOOL.has(k) || v === undefined || v.startsWith("--")) flags[k] = true; else { flags[k] = v; i++; }
     } else rest.push(a);
@@ -159,13 +161,13 @@ async function cmdLs({ rest }) {
   const loops = built.loops.filter((l) => !rest[0] || l.id === rest[0]);
   if (!loops.length) return console.log(rest[0] ? `no loop ${rest[0]}` : "no loops");
   for (const l of loops) {
-    console.log(`${l.id}${l.goal ? ` — ${l.goal}` : ""} (lead: ${l.lead ?? "you"})${l.warnings.length ? ` ! ${l.warnings.join("; ")}` : ""}`);
-    const by = new Map(l.members.map((m) => [m.address, m]));
+    console.log(`${l.id}${l.goal ? ` — ${l.goal}` : ""} (coordinator: ${l.coordinator ?? "you"})${l.warnings.length ? ` ! ${l.warnings.join("; ")}` : ""}`);
+    const by = new Map(l.agents.map((m) => [m.address, m]));
     const show = (a, depth) => {
       const m = by.get(a);
       const st = m.status + (m.kind ? `/${m.kind}` : "");
       const name = m.terminal.labels["omniloop.job"] ?? m.terminal.title ?? "";
-      console.log(`${"  ".repeat(depth + 1)}${a}${m.isLead ? "*" : ""} ${st}${name ? ` ${String(name).slice(0, 50)}` : ""}${m.needsYou ? " [needs you]" : ""}`);
+      console.log(`${"  ".repeat(depth + 1)}${a}${m.isCoordinator ? "*" : ""} ${st}${name ? ` ${String(name).slice(0, 50)}` : ""}${m.needsYou ? " [needs you]" : ""}`);
       for (const c of m.children) show(c, depth + 1);
     };
     for (const r of l.roots) show(r, 0);
@@ -174,10 +176,10 @@ async function cmdLs({ rest }) {
 
 async function cmdStart({ flags, rest }) {
   const loop = rest.shift();
-  if (!loop || !flags["--"] || !rest.length) die("usage: omniloop start <loop> [--lead] [--to T] [--job J] [--goal G] [--cwd D] -- <program...>");
-  const to = flags.to ?? (flags.lead ? null : me());
+  if (!loop || !flags["--"] || !rest.length) die("usage: omniloop start <loop> [--coordinator] [--to T] [--job J] [--goal G] [--cwd D] -- <program...>");
+  const to = flags.to ?? (flags.coordinator ? null : me());
   const labels = { [LABEL.loop]: loop };
-  if (flags.lead) labels[LABEL.lead] = "1";
+  if (flags.coordinator) for (const k of COORDINATOR_KEYS) labels[k] = "1";
   if (to) labels[LABEL.reportsTo] = to;
   if (flags.goal) labels[LABEL.goal] = flags.goal;
   if (flags.job) labels["omniloop.job"] = flags.job;
@@ -192,13 +194,13 @@ async function cmdStart({ flags, rest }) {
   const manifest = await manifestOf(loop);
   let argv;
   if (/(^|\/)claude$/.test(rest[0])) {
-    // A Claude helper: the user's own claude flags, the loop's context folders, and a task that starts with the brief.
+    // A Claude subagent: the user's own claude flags, the loop's context folders, and a task that starts with the brief.
     const { flags, task } = splitTask(rest);
-    argv = memberArgv({ shell: SHELL, claudeArgv: [...(await claudeLaunch()), ...flags], ...(await launchOf(manifest)), binDir: BIN,
+    argv = agentArgv({ shell: SHELL, claudeArgv: [...(await claudeLaunch()), ...flags], ...(await launchOf(manifest)), binDir: BIN,
       task: task ? `First run \`omniloop brief\`. ${task}` : null });
   } else argv = viaLogin(rest);
   if (manifest) {
-    // Start in the loop folder (the members' shared Claude project), in the loop's own space when it has one.
+    // Start in the loop folder (the agents' shared Claude project), in the loop's own space when it has one.
     if (!flags.cwd) args.push("--cwd", loopHome(homedir(), loop));
     const sp = !flags.space && (await loopSpace(loop));
     if (sp) { const i = args.indexOf(`herdr.space=${labels["herdr.space"]}`); if (i >= 0) args[i] = `herdr.space=${sp.id}`; else args.push("--label", `herdr.space=${sp.id}`); }
@@ -211,9 +213,9 @@ async function cmdStart({ flags, rest }) {
 async function cmdJoin({ flags, rest }) {
   const loop = rest[0];
   const t = flags.terminal ?? me();
-  if (!loop || !t) die("usage: omniloop join <loop> [--lead] [--to T] [--goal G] [--job J] [--terminal T]");
+  if (!loop || !t) die("usage: omniloop join <loop> [--coordinator] [--to T] [--goal G] [--job J] [--terminal T]");
   const kv = [`${LABEL.loop}=${loop}`];
-  if (flags.lead) kv.push(`${LABEL.lead}=1`);
+  if (flags.coordinator) kv.push(...COORDINATOR_KEYS.map((k) => `${k}=1`));
   if (flags.to) kv.push(`${LABEL.reportsTo}=${flags.to}`);
   if (flags.goal) kv.push(`${LABEL.goal}=${flags.goal}`);
   if (flags.job) kv.push(`omniloop.job=${flags.job}`);
@@ -223,7 +225,7 @@ async function cmdJoin({ flags, rest }) {
 
 async function cmdLeave({ flags }) {
   const t = flags.terminal ?? me();
-  await hc(["label", t, ...[LABEL.loop, LABEL.lead, LABEL.reportsTo, LABEL.goal, LABEL.notify, LABEL.needs, "omniloop.job"].map((k) => `${k}=`)], { json: false });
+  await hc(["label", t, ...[LABEL.loop, ...COORDINATOR_KEYS, LABEL.reportsTo, LABEL.goal, LABEL.notify, LABEL.needs, "omniloop.job"].map((k) => `${k}=`)], { json: false });
   console.log(`${t} left its loop`);
 }
 
@@ -270,14 +272,14 @@ async function cmdHandoff({ flags, rest }) {
   if (keep.length > 1 && !keep[keep.length - 1].startsWith("-") && !keep[keep.length - 2]?.startsWith("--")) keep.pop();
   const labels = Object.entries(t.labels).filter(([k]) => k.startsWith("omniloop") || k === "herdr.space");
   // In a loop with a folder, start fresh from it (the user's claude, the loop's context folders, its CLAUDE.md);
-  // otherwise reuse the old command line and folder. The task goes right after the program (see memberArgv).
+  // otherwise reuse the old command line and folder. The task goes right after the program (see agentArgv).
   const manifest = await manifestOf(t.labels[LABEL.loop]);
   const args = ["run", "--bg", "--no-parent", "--no-notify", "--cwd", manifest ? loopHome(homedir(), manifest.id) : t.cwd];
   for (const [k, v] of labels) args.push("--label", `${k}=${v}`);
   const base = manifest ? await claudeLaunch() : keep;
-  const r = await hc([...args, "--", ...memberArgv({ shell: SHELL, claudeArgv: base, ...(await launchOf(manifest)), binDir: BIN,
+  const r = await hc([...args, "--", ...agentArgv({ shell: SHELL, claudeArgv: base, ...(await launchOf(manifest)), binDir: BIN,
     task: `First run \`omniloop brief\`. Then read ${file} and continue where it leaves off.` })]);
-  await hc(["label", old, `${LABEL.retired}=${r.address}`, `${LABEL.lead}=`], { json: false });
+  await hc(["label", old, `${LABEL.retired}=${r.address}`, ...COORDINATOR_KEYS.map((k) => `${k}=`)], { json: false });
   // Re-point the old one's reports.
   const kids = (await allTerminals()).filter((x) => x.labels?.[LABEL.reportsTo] === old);
   for (const k of kids) await hc(["label", k.address, `${LABEL.reportsTo}=${r.address}`], { json: false });
@@ -336,7 +338,7 @@ async function isolateDirs(id, manifest, { dry = false, only = null } = {}) {
 async function cmdNew({ flags, rest }) {
   const temp = Boolean(flags.temp);
   const id = rest[0] ?? (temp ? tempId(Date.now(), (await allManifests()).map((m) => m.id)) : null);
-  if (!validId(id)) die("usage: omniloop new <id> [--goal G] [--dir D]... [--project P]... [--task T] [--no-lead] [--temp]   (id: a-z 0-9 - _; --temp: no id needed)");
+  if (!validId(id)) die("usage: omniloop new <id> [--goal G] [--dir D]... [--project P]... [--task T] [--no-coordinator] [--temp]   (id: a-z 0-9 - _; --temp: no id needed)");
   const home = loopHome(homedir(), id);
   await dropAlias(id);
   if (await manifestOf(id)) die(`loop ${id} already exists: ${home}`);
@@ -365,16 +367,16 @@ async function cmdNew({ flags, rest }) {
   const np = manifest.projects?.length ?? 0;
   console.log(`${temp ? "temporary " : ""}loop ${id}: ${home} (${dirs.length} context folder${dirs.length === 1 ? "" : "s"}${np ? `; project${np === 1 ? "" : "s"} ${manifest.projects.join(", ")}` : ""})${dry ? " [dry run: nothing written]" : ""}`);
   for (const l of iso.lines) console.log(l);
-  if (flags["no-lead"]) return;
+  if (flags["no-coordinator"]) return;
 
-  // A space named after the loop, started in its folder, with the lead as its first tab.
+  // A space named after the loop, started in its folder, with the coordinator as its first tab.
   // A project with "autostart" (study) makes the goal a whole job ("study <link>"): start on it. Otherwise ask first.
   const autostart = manifest.goal && known.some((p) => p.autostart && manifest.projects?.includes(p.name));
   const task = typeof flags.task === "string" ? flags.task : autostart
-    ? `You lead the loop ${id}. Read CLAUDE.md, run \`omniloop brief\`, then do the goal with your project's skill: ${manifest.goal}`
-    : temp ? `You lead the temporary loop ${id}. Read CLAUDE.md, run \`omniloop brief\`, then ask the user what to do first. When they say they're done, run \`omniloop rm\`.`
-    : `You lead the loop ${id}. Read CLAUDE.md, run \`omniloop brief\`, then ask the user what to do first.`;
-  await startLead(id, manifest, task, { dry: flags["dry-run"] });
+    ? `You coordinate the loop ${id}. Read CLAUDE.md, run \`omniloop brief\`, then do the goal with your project's skill: ${manifest.goal}`
+    : temp ? `You coordinate the temporary loop ${id}. Read CLAUDE.md, run \`omniloop brief\`, then ask the user what to do first. When they say they're done, run \`omniloop rm\`.`
+    : `You coordinate the loop ${id}. Read CLAUDE.md, run \`omniloop brief\`, then ask the user what to do first.`;
+  await startCoordinator(id, manifest, task, { dry: flags["dry-run"] });
 }
 
 /** The tab or space `herdr-app do` just made, found by the ids it printed: its first terminal, or null. */
@@ -391,35 +393,35 @@ async function madeTerminal(made) {
 }
 
 /**
- * Start a loop's lead on this computer and label it. In the loop's space when one is open here (a new tab named
- * "lead"), else in a new space named after the loop. The lead's terminal comes from what `herdr-app do` printed,
+ * Start a loop's coordinator on this computer and label it. In the loop's space when one is open here (a new tab named
+ * "coordinator"), else in a new space named after the loop. The coordinator's terminal comes from what `herdr-app do` printed,
  * never from a name lookup (an old space with the loop's name may still be open).
  */
-async function startLead(id, manifest, task, { dry = false } = {}) {
+async function startCoordinator(id, manifest, task, { dry = false } = {}) {
   const home = loopHome(homedir(), id);
-  const argv = memberArgv({ shell: SHELL, claudeArgv: await claudeLaunch(), ...(await launchOf(manifest)), task, binDir: BIN });
+  const argv = agentArgv({ shell: SHELL, claudeArgv: await claudeLaunch(), ...(await launchOf(manifest)), task, binDir: BIN });
   const sp = await loopSpace(id);
-  const [cmd, args] = sp ? ["tab.new", { space: sp.id, name: "lead", folder: home, argv }] : ["space.new", { name: id, folder: home, argv }];
+  const [cmd, args] = sp ? ["tab.new", { space: sp.id, name: "coordinator", folder: home, argv }] : ["space.new", { name: id, folder: home, argv }];
   if (dry) return console.log(JSON.stringify({ [cmd]: args }, null, 1));
   const { stdout } = await run("herdr-app", ["do", cmd, JSON.stringify(args)]);
   let made = null;
   try { made = JSON.parse(stdout); } catch {}
-  let lead = null;
-  for (let i = 0; i < 40 && !lead; i++) {
-    lead = await madeTerminal(made);
-    if (!lead) await new Promise((r) => setTimeout(r, 250));
+  let coordinator = null;
+  for (let i = 0; i < 40 && !coordinator; i++) {
+    coordinator = await madeTerminal(made);
+    if (!coordinator) await new Promise((r) => setTimeout(r, 250));
   }
-  if (!lead) die(`${cmd} ran for ${id}, but its lead didn't appear; label it yourself: omniloop join ${id} --lead --terminal <t>`);
-  const kv = [`${LABEL.loop}=${id}`, `${LABEL.lead}=1`, "omniloop.job=lead"];
+  if (!coordinator) die(`${cmd} ran for ${id}, but its coordinator didn't appear; label it yourself: omniloop join ${id} --coordinator --terminal <t>`);
+  const kv = [`${LABEL.loop}=${id}`, ...COORDINATOR_KEYS.map((k) => `${k}=1`), "omniloop.job=coordinator"];
   if (manifest.goal) kv.push(`${LABEL.goal}=${manifest.goal}`);
-  await hc(["label", lead, ...kv], { json: false });
-  console.log(`lead ${lead} in space ${id}`);
+  await hc(["label", coordinator, ...kv], { json: false });
+  console.log(`coordinator ${coordinator} in space ${id}`);
 }
 
 /**
- * omniloop revive <id>: start a fresh lead for a loop nobody is running in (Enter on an idle loop in ⌘O). It catches
- * up from the loop's own notes and asks; it never redoes a project's autostart job. A loop with a running lead
- * gets nothing new: its lead's address is printed instead. This computer's loops only.
+ * omniloop revive <id>: start a fresh coordinator for a loop nobody is running in (Enter on an idle loop in ⌘O). It catches
+ * up from the loop's own notes and asks; it never redoes a project's autostart job. A loop with a running coordinator
+ * gets nothing new: its coordinator's address is printed instead. This computer's loops only.
  */
 async function cmdRevive({ flags, rest }) {
   const id = rest[0];
@@ -428,10 +430,10 @@ async function cmdRevive({ flags, rest }) {
   if (!manifest) die(`loop ${id} has no folder here (${loopHome(homedir(), id)})`);
   const built = buildLoops(await allTerminals());
   const live = built.loops.find((l) => l.id === id);
-  if (live?.lead) return console.log(`lead ${live.lead} in space ${id} (already running)`);
+  if (live?.coordinator) return console.log(`coordinator ${live.coordinator} in space ${id} (already running)`);
   const task = typeof flags.task === "string" ? flags.task
-    : `You lead the loop ${id}, picking it up again: nobody was running in it. Read CLAUDE.md (goal and decisions), run \`omniloop brief\`, \`omniloop task ls\` and \`omniloop feed\`, and \`engram search "${id}"\`. Then tell the user in a few lines where things stand and ask what to do next.`;
-  await startLead(id, manifest, task, { dry: flags["dry-run"] });
+    : `You coordinate the loop ${id}, picking it up again: nobody was running in it. Read CLAUDE.md (goal and decisions), run \`omniloop brief\`, \`omniloop task ls\` and \`omniloop feed\`, and \`engram search "${id}"\`. Then tell the user in a few lines where things stand and ask what to do next.`;
+  await startCoordinator(id, manifest, task, { dry: flags["dry-run"] });
 }
 
 function resolvePath(p) {
@@ -454,7 +456,7 @@ async function cmdAddDir({ flags, rest }) {
   if (!on) ({ manifest: next, lines } = await isolateDirs(id, next, { only: path }));
   await writeJson(join(home, "loop.json"), next);
   await writeClaudeMd(home, next, await readFile(join(home, "CLAUDE.md"), "utf8").catch(() => null));
-  console.log(`added ${path}${on ? ` (on ${on})` : ""} to ${id}: members started from now get it. Running ones see it in CLAUDE.md; reading it may ask for approval until they hand off.`);
+  console.log(`added ${path}${on ? ` (on ${on})` : ""} to ${id}: agents started from now get it. Running ones see it in CLAUDE.md; reading it may ask for approval until they hand off.`);
   for (const l of lines) console.log(l);
 }
 
@@ -470,13 +472,13 @@ async function cmdShared({ flags }) {
   if (!id) die("usage: omniloop shared [--loop id]");
   const shared = sharedWith(await allManifests(), id);
   if (!shared.length) return console.log(`no other loop works in ${id}'s folders`);
-  // Each other loop's live lead on this computer, to tell before a change.
-  const leads = new Map();
+  // Each other loop's live coordinator on this computer, to tell before a change.
+  const coordinators = new Map();
   for (const t of await allTerminals().catch(() => []))
-    if (t.state === "live" && t.labels?.[LABEL.lead] && !t.labels?.[LABEL.retired] && t.labels?.[LABEL.loop]) leads.set(t.labels[LABEL.loop], t.address);
+    if (t.state === "live" && isCoordinatorLabeled(t.labels) && !t.labels?.[LABEL.retired] && t.labels?.[LABEL.loop]) coordinators.set(t.labels[LABEL.loop], t.address);
   for (const s of shared) {
     console.log(s.path);
-    for (const l of s.loops) console.log(`  ${l.id}${l.path !== s.path ? ` (${l.path})` : ""}: ${leads.has(l.id) ? `lead ${leads.get(l.id)}` : "no lead running (add a task with omniloop task add --loop, or tell the user)"}`);
+    for (const l of s.loops) console.log(`  ${l.id}${l.path !== s.path ? ` (${l.path})` : ""}: ${coordinators.has(l.id) ? `coordinator ${coordinators.get(l.id)}` : "no coordinator running (add a task with omniloop task add --loop, or tell the user)"}`);
   }
 }
 
@@ -510,14 +512,14 @@ async function cmdGoal({ flags, rest }) {
   // The feed line comes before anything that needs herdr-core, so it lands even when hc is down.
   const gone = sub === "done" ? goalsOf(m).find((g) => String(g.n) === String(rest[0]))?.text : null;
   await postFeed(id, me() ?? YOU, sub === "set" ? `goal set: ${openGoals(next)[0]?.text ?? ""}` : sub === "add" ? `goal added: ${rest.join(" ")}` : sub === "edit" ? `goal ${rest[0]} reworded: ${rest.slice(1).join(" ")}` : `goal ${rest[0]} done${gone ? `: ${gone}` : ""}`);
-  // Members: the label carries the current goal (the tabs and status bar read it). Agents started with omniloop's
+  // Agents: the label carries the current goal (the tabs and status bar read it). Agents started with omniloop's
   // plugin hear about the change from its hook on their next prompt; others get the note typed in, if idle.
-  let members = [];
-  try { members = (await allTerminals()).filter((t) => !t.address.includes("/") && t.labels?.[LABEL.loop] === id && !t.labels?.[LABEL.retired]); }
-  catch { console.error("omniloop: saved, but herdr-core (hc) didn't answer, so no member was told or relabelled"); }
+  let agents = [];
+  try { agents = (await allTerminals()).filter((t) => !t.address.includes("/") && t.labels?.[LABEL.loop] === id && !t.labels?.[LABEL.retired]); }
+  catch { console.error("omniloop: saved, but herdr-core (hc) didn't answer, so no agent was told or relabelled"); }
   const note = goalNote(next, id);
   const told = [], later = [];
-  await Promise.all(members.map(async (t) => {
+  await Promise.all(agents.map(async (t) => {
     if (next.goal !== m.goal) await hc(["label", t.address, `${LABEL.goal}=${next.goal}`], { json: false }).catch(() => {});
     if (t.address === me()) return;
     if ((t.foreground?.argv ?? []).includes(PLUGIN)) return told.push(`${t.address} (hook)`);
@@ -634,7 +636,7 @@ async function watcherLive(loop) {
   return false;
 }
 
-// What the pane's Enter runs: post as you, then tell the lead the way the watcher does (now if it is waiting, else held).
+// What the pane's Enter runs: post as you, then tell the coordinator the way the watcher does (now if it is waiting, else held).
 async function cmdReply({ flags, rest }) {
   const id = await loopOfMe(flags);
   if (!id || flags.thread === true || !rest.length) die('usage: omniloop reply "<text>" --loop L [--thread T]');
@@ -643,34 +645,34 @@ async function cmdReply({ flags, rest }) {
   const r = feedEntry({ from: YOU, thread: flags.thread, text: rest.join(" "), now: Date.now() });
   if (r.error) die(r.error);
   await appendFeed(id, r.entry);
-  let lead = null, status = null;
+  let coordinator = null, status = null;
   try {
     const l = buildLoops(await allTerminals()).loops.find((x) => x.id === id); // this computer's loop: its key is the plain id
-    lead = l?.lead ?? null;
-    status = statusOf(l?.members.find((m) => m.address === lead)?.terminal); // not m.status: that turns "no status" (a shell) into idle
+    coordinator = l?.coordinator ?? null;
+    status = statusOf(l?.agents.find((m) => m.address === coordinator)?.terminal); // not m.status: that turns "no status" (a shell) into idle
   } catch {
     const msg = "herdr-core (hc) didn't answer; this reply was not delivered";
     await postFeed(id, "omniloop", msg);
     die(msg);
   }
-  const plan = replyPlan(lead, status), text = `you: ${r.entry.text.replace(/\s+/g, " ")}`;
+  const plan = replyPlan(coordinator, status), text = `you: ${r.entry.text.replace(/\s+/g, " ")}`;
   if (plan.none) {
-    await postFeed(id, "omniloop", "no lead is running; nobody got this");
-    return console.log(`no lead is running in ${id}; nobody got this`);
+    await postFeed(id, "omniloop", "no coordinator is running; nobody got this");
+    return console.log(`no coordinator is running in ${id}; nobody got this`);
   }
   if (plan.send) {
     try {
-      await run("hc", ["send", ...(plan.send.if ? ["--if", plan.send.if] : []), lead, text], { timeout: SEND_TIMEOUT_MS });
-      return console.log(`sent to ${lead}`);
+      await run("hc", ["send", ...(plan.send.if ? ["--if", plan.send.if] : []), coordinator, text], { timeout: SEND_TIMEOUT_MS });
+      return console.log(`sent to ${coordinator}`);
     } catch (e) {
-      if (!sendFailed(e.code, `${e.stdout ?? ""}${e.stderr ?? ""}`)) return console.log(`sent to ${lead}`);
+      if (!sendFailed(e.code, `${e.stdout ?? ""}${e.stderr ?? ""}`)) return console.log(`sent to ${coordinator}`);
       // refused (it started working meanwhile) or timed out: hold it like any note
     }
   }
-  await putTimer({ at: Date.now(), to: lead, text, note: true });
-  if (await watcherLive(id)) return console.log(`held for ${lead} (${status ?? "not an agent"}); the watcher delivers it when it stops`);
+  await putTimer({ at: Date.now(), to: coordinator, text, note: true });
+  if (await watcherLive(id)) return console.log(`held for ${coordinator} (${status ?? "not an agent"}); the watcher delivers it when it stops`);
   await postFeed(id, "omniloop", `your reply waits for a watcher: none is running (omniloop watch --loop ${id})`);
-  console.log(`held for ${lead}; no watcher is running, so it waits for one (omniloop watch)`);
+  console.log(`held for ${coordinator}; no watcher is running, so it waits for one (omniloop watch)`);
 }
 
 // "you" is the user; "me" is the terminal running this; anything else is an agent's terminal.
@@ -766,33 +768,33 @@ async function cmdProject({ flags, rest }) {
     if (next === m) return console.log(sub === "add" ? `${id} already has the ${name} project` : `${id} has no ${name} project`);
     await writeJson(join(home, "loop.json"), next);
     await writeClaudeMd(home, next, await readFile(join(home, "CLAUDE.md"), "utf8").catch(() => null));
-    return console.log(sub === "add" ? `added the ${name} project to ${id}: members started from now get its skills and tools; running ones see its notes in CLAUDE.md.`
-      : `removed the ${name} project from ${id}: members started from now don't get it; running ones keep what they loaded.`);
+    return console.log(sub === "add" ? `added the ${name} project to ${id}: agents started from now get its skills and tools; running ones see its notes in CLAUDE.md.`
+      : `removed the ${name} project from ${id}: agents started from now don't get it; running ones keep what they loaded.`);
   }
   die("usage: omniloop project ls [--json] | project match <text> [--json] | project add|rm <project> [--loop id]");
 }
 
-const BRIEF = `omniloop: you are in a loop (a piece of work with one lead). Commands (short output):
-  omniloop ls [loop]                      the loop as a tree; * = lead
-  omniloop start <loop> --job J -- claude "<task>"   start a helper that reports to you; prints its id
+const BRIEF = `omniloop: you are in a loop (a piece of work with one coordinator). Commands (short output):
+  omniloop ls [loop]                      the loop as a tree; * = coordinator
+  omniloop start <loop> --job J -- claude "<task>"   start a subagent that reports to you; prints its id
   omniloop timer 20m "<what to check>"    get a note later; don't sleep or poll
   omniloop needs-you [off]                this block is the user's (credentials, spending, anything public)
   omniloop goal [set "…" | add "…" | edit N "…" | done N]   the user's end goal for this loop (always one); your work serves it
   omniloop task [ls | add "…" --for you|me|t3 | done N | give N t3 | edit N "…" | reopen N | rm N | move N <loop>]
   omniloop say "…" [--thread T]           post to the loop's chat feed (the user reads it there)
   omniloop add-dir <path> | rm-dir <path> add or remove a context folder of the loop (CLAUDE.md lists them)
-  omniloop shared                         other loops in this loop's folders, and their leads (tell them before a change)
+  omniloop shared                         other loops in this loop's folders, and their coordinators (tell them before a change)
   omniloop project ls | project add|rm <project>   reusable context (skills, tools, notes) for a kind of work
   omniloop rename [<old>] <new>           rename (move) a loop: folder, worktrees, branches, space, labels
   omniloop rm [<loop>] [--force]          delete a loop and close its space (refuses unmerged work); ask the user first
-  omniloop new --temp [--goal "…"]        a temporary loop: no memory, deleted on rm or once its last member exits
+  omniloop new --temp [--goal "…"]        a temporary loop: no memory, deleted on rm or once its last agent exits
   omniloop handoff <file>                 at ~60% context: write <file>, run this, then stop
-  omniloop send <t> "<text>"              message a helper or your lead (arrives labelled as you, not as the user)
+  omniloop send <t> "<text>"              message a subagent or your coordinator (arrives labelled as you, not as the user)
   omniloop sessions                       Claude sessions you can send to (address, name, pid)
-  hc read <t>                             see a helper's screen
-Rules: end your turn when you wait; the watcher types a one-line note into you when a helper blocks,
+  hc read <t>                             see a subagent's screen
+Rules: end your turn when you wait; the watcher types a one-line note into you when a subagent blocks,
 finishes or stalls ("omniloop: t3 blocked (question): ..."). Never poll, sleep or loop on hc wait.
-Only the lead (and needs-you) reaches the user; answer your helpers' questions yourself.
+Only the coordinator (and needs-you) reaches the user; answer your subagents' questions yourself.
 Don't ask what you can decide: when one option is recommended or obvious, take it and say which. Ask the user
 only for what is theirs (credentials, spending, anything public, a real choice between goals).`;
 
@@ -820,7 +822,7 @@ async function aliasesOf(home) {
 }
 
 /** This computer's terminals in a loop (null when herdr-core doesn't answer). */
-async function membersOf(id) {
+async function agentsOf(id) {
   try { return (await allTerminals()).filter((t) => !t.address.includes("/") && t.labels?.[LABEL.loop] === id); } catch { return null; }
 }
 
@@ -843,7 +845,7 @@ async function cmdRmDir({ flags, rest }) {
   await writeJson(join(home, "loop.json"), next);
   await writeClaudeMd(home, next, await readFile(join(home, "CLAUDE.md"), "utf8").catch(() => null));
   await postFeed(id, me() ?? YOU, `context folder removed: ${path}`);
-  console.log(`removed ${path} from ${id}: members started from now don't get it.`);
+  console.log(`removed ${path} from ${id}: agents started from now don't get it.`);
 }
 
 /** A worktree's state: uncommitted files, and commits on its branch not in the repo's checked-out branch. */
@@ -872,8 +874,8 @@ async function dropWorktree(w, force) {
 
 /**
  * omniloop rename [<old>] <new>: rename (move) a loop. The folder moves to ~/loops/<new> and the old name stays as a
- * link to it, so members already running there keep working. Worktrees follow (git worktree repair) and their branch
- * becomes <new>/work; members are relabelled, the space renamed, the Claude project folder moved (and linked).
+ * link to it, so agents already running there keep working. Worktrees follow (git worktree repair) and their branch
+ * becomes <new>/work; agents are relabelled, the space renamed, the Claude project folder moved (and linked).
  */
 async function cmdRename({ flags, rest }) {
   const [a, b] = rest;
@@ -885,11 +887,11 @@ async function cmdRename({ flags, rest }) {
   await dropAlias(to);
   const fromHome = loopHome(homedir(), from), toHome = loopHome(homedir(), to);
   if (await lstat(toHome).catch(() => null)) die(`${toHome} already exists`);
-  const members = await membersOf(from);
+  const agents = await agentsOf(from);
   const sp = await loopSpace(from);
   const now = Date.now();
   let next = renamedManifest(m, { from, to, fromHome, toHome, now });
-  if (flags["dry-run"]) return console.log(JSON.stringify({ move: [fromHome, toHome], relabel: members?.map((t) => t.address) ?? "hc down", space: sp?.id ?? null, dirs: next.dirs }, null, 1));
+  if (flags["dry-run"]) return console.log(JSON.stringify({ move: [fromHome, toHome], relabel: agents?.map((t) => t.address) ?? "hc down", space: sp?.id ?? null, dirs: next.dirs }, null, 1));
 
   await rename(fromHome, toHome);
   await symlink(toHome, fromHome);
@@ -913,17 +915,17 @@ async function cmdRename({ flags, rest }) {
   const ck = join(projects, claudeProjectKey(fromHome)), nk = join(projects, claudeProjectKey(toHome));
   if ((await lstat(ck).catch(() => null))?.isDirectory() && !(await exists(nk))) { await rename(ck, nk); await symlink(nk, ck); }
   await rename(join(HOME, `state-${from}.json`), join(HOME, `state-${to}.json`)).catch(() => {});
-  if (members) for (const t of members) await hc(["label", t.address, `${LABEL.loop}=${to}`], { json: false }).catch(() => lines.push(`  couldn't relabel ${t.address}: omniloop join ${to} --terminal ${t.address}`));
-  else lines.push("  herdr-core didn't answer: members keep the old name; omniloop join <new> --terminal <t> for each");
+  if (agents) for (const t of agents) await hc(["label", t.address, `${LABEL.loop}=${to}`], { json: false }).catch(() => lines.push(`  couldn't relabel ${t.address}: omniloop join ${to} --terminal ${t.address}`));
+  else lines.push("  herdr-core didn't answer: agents keep the old name; omniloop join <new> --terminal <t> for each");
   if (sp) await run("herdr-app", ["do", "space.rename", JSON.stringify({ id: sp.id, name: to })]).catch(() => lines.push(`  space ${sp.id} keeps the old name`));
   await postFeed(to, me() ?? YOU, `loop renamed: ${from} → ${to}`);
-  console.log(`renamed ${from} to ${to}: ${toHome}${members?.length ? `; ${members.length} member(s) relabelled` : ""}${sp ? "; space renamed" : ""}. ${fromHome} links to it for members already running.`);
+  console.log(`renamed ${from} to ${to}: ${toHome}${agents?.length ? `; ${agents.length} agent(s) relabelled` : ""}${sp ? "; space renamed" : ""}. ${fromHome} links to it for agents already running.`);
   for (const l of lines) console.log(l);
 }
 
 /**
  * omniloop rm [<loop>] [--force] [--purge]: delete a loop. Refuses when a worktree has uncommitted files or unmerged
- * commits (--force: drop the files, keep the branch), or when it has running members and you're not one of them
+ * commits (--force: drop the files, keep the branch), or when it has running agents and you're not one of them
  * (--force: stop them). Deletes the loop folder and its worktrees, never its context folders. Closes its space last,
  * from a detached process, so it works from inside the loop. --purge (always on for a temporary loop) also deletes
  * its Claude transcripts, scratchpads, prompt-history lines and omniloop's own records of its terminals.
@@ -941,19 +943,19 @@ async function cmdRm({ flags, rest }) {
   for (const d of m.dirs ?? []) if (d.worktree && !d.machine) wts.push(await worktreeFacts(d));
   const chk = removeCheck(wts, { force });
   if (!chk.ok) die(`${id} not removed: ${chk.problems.join("; ")}. Land or drop that work first, or rerun with --force (uncommitted files are lost; an unmerged branch is kept).`);
-  const members = await membersOf(id);
-  if (members === null && !force) die("herdr-core (hc) didn't answer, so the loop's running members can't be found; rerun with --force to delete anyway");
-  const live = (members ?? []).filter((t) => t.state === "live");
+  const agents = await agentsOf(id);
+  if (agents === null && !force) die("herdr-core (hc) didn't answer, so the loop's running agents can't be found; rerun with --force to delete anyway");
+  const live = (agents ?? []).filter((t) => t.state === "live");
   const inside = me() && live.some((t) => t.address === me());
-  if (live.length && !inside && !force) die(`${id} has ${live.length} running member(s) (${live.map((t) => t.address).join(", ")}): rerun with --force to stop them, or run it from inside the loop`);
+  if (live.length && !inside && !force) die(`${id} has ${live.length} running agent(s) (${live.map((t) => t.address).join(", ")}): rerun with --force to stop them, or run it from inside the loop`);
   const sp = await loopSpace(id);
   const aliases = await aliasesOf(home);
-  const job = { id, home, root, space: sp?.id ?? null, terms: (members ?? []).map((t) => t.address), purge, aliases, formerly: await formerHomes(m, home) };
+  const job = { id, home, root, space: sp?.id ?? null, terms: (agents ?? []).map((t) => t.address), purge, aliases, formerly: await formerHomes(m, home) };
   if (flags["dry-run"]) return console.log(JSON.stringify({ worktrees: wts.map((w) => w.worktree), ...job }, null, 1));
 
   const lines = [];
   for (const w of wts) lines.push(...(await dropWorktree(w, force)));
-  // Timers for its members would only fire into nothing.
+  // Timers for its agents would only fire into nothing.
   for (const f of await readdir(TIMERS).catch(() => [])) {
     const t = await readJson(join(TIMERS, f));
     if (t && job.terms.includes(t.to)) await rm(join(TIMERS, f), { force: true });
@@ -961,7 +963,7 @@ async function cmdRm({ flags, rest }) {
   await rm(join(HOME, `state-${id}.json`), { force: true });
   console.log(`${m.temp ? "temporary " : ""}loop ${id} deleted${purge ? ", with its transcripts and history" : ""}${sp ? "; its space closes now" : ""}.`);
   for (const l of lines) console.log(l);
-  // The rest (stopping members, closing the space, deleting the folder and transcripts) runs detached: when this runs
+  // The rest (stopping agents, closing the space, deleting the folder and transcripts) runs detached: when this runs
   // inside the loop, closing the space ends this very process.
   await mkdir(join(HOME, "reap"), { recursive: true, mode: 0o700 });
   const jobFile = join(HOME, "reap", `${id}-${process.pid}-${Date.now().toString(36)}.json`);
@@ -1094,7 +1096,7 @@ async function cmdWatch({ flags }) {
     const files = await loadTimers();
     const known = new Set(state.timers.map((t) => t.id));
     for (const f of files) if (!known.has(f.id)) state.timers.push(f);
-    // Each member's last turn (its Stop hook's record): finished-turn notes carry the reply, and skip what it already said.
+    // Each agent's last turn (its Stop hook's record): finished-turn notes carry the reply, and skip what it already said.
     const turns = {};
     await Promise.all([...terms.keys()].map(async (a) => { const t = await turnRecord(a); if (t) turns[a] = t; }));
     // A console made in a loop's space joins that loop (core/watch.js adoptions). Not in a dry run or a one-loop watcher.
@@ -1152,7 +1154,7 @@ async function cmdWatch({ flags }) {
     if (!quiet && Date.now() - lastSweep > SWEEP_MS) { lastSweep = Date.now(); await sweepTemp().catch((e) => log("SWEEP", `failed: ${e.message}`)); }
   };
 
-  // Temporary loops end by themselves once their last member is gone (core/lifecycle.js endedTempLoops). The terminal
+  // Temporary loops end by themselves once their last agent is gone (core/lifecycle.js endedTempLoops). The terminal
   // list comes from hc's own event stream, so a sweep never runs on a failed hc call.
   const SWEEP_MS = 60_000, seenTemp = new Set(), triedTemp = new Set();
   let lastSweep = 0;
@@ -1201,7 +1203,7 @@ async function cmdWatch({ flags }) {
       else if (p.type === "turn") Object.assign(cur, { turn: d.turn });
       else Object.assign(cur, d);
       cur.event_ms = now;
-      // When you last interacted with a loop member (shown and ranked by the view).
+      // When you last interacted with a loop agent (shown and ranked by the view).
       if (cur.labels?.[LABEL.loop] && (p.type === "status" || p.type === "labels")) {
         if (touchedByYou(before, cur)) {
           withYou[p.terminal] = now;

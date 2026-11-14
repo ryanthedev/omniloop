@@ -69,7 +69,7 @@ export default class Pane extends View {
       .when(Boolean(p.terminal), (el) => el.child(div().flex_none().px(5).h(17).rounded(4).bg(t.hover).text_size(10.5).font_semibold().text_color(t.muted).flex().items_center().child(p.terminal)))
       .child(div().flex_none().truncate().max_w(320).font_medium().text_color(t.foreground).child(name))
       .when(Boolean(who?.loop), (el) => el.child(div().flex_none().px(6).h(17).rounded(4).bg(t.accent + "22").text_size(10.5).font_semibold().text_color(t.accent).flex().items_center()
-        .child(`◎ ${who.loop}${who.isLead ? " ★" : ""}`)))
+        .child(`◎ ${who.loop}${who.isCoordinator ? " ★" : ""}`)))
       .child(div().flex_1().truncate().text_color(t.dim).child(folder(p.cwd)))
       .when(st === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
       .when(st === "blocked", el => el.child(div().flex_none().px(6).h(18).flex().items_center().rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).child("Needs you")))
