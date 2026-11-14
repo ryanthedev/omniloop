@@ -11,12 +11,12 @@ const disk = [
 const live = [
   { id: "alpha", goal: "Ship alpha", coordinator: "t1", needsYou: 0, lastWithYou: 100, ago: "1m",
     rows: [{ address: "t1", name: "coordinator", depth: 0, status: "working", isCoordinator: true }, { address: "t3", name: "parser", depth: 1, status: "idle" }] },
-  { id: "ska/remote", goal: "Remote", coordinator: "ska/t9", needsYou: 2, lastWithYou: null, rows: [] },
+  { id: "kiwi/remote", goal: "Remote", coordinator: "kiwi/t9", needsYou: 2, lastWithYou: null, rows: [] },
 ];
 
 test("allLoops joins disk and live loops; needs-you, then recent, then touched", () => {
   const ls = allLoops(disk, live);
-  assert.deepEqual(ls.map((l) => l.id), ["ska/remote", "alpha", "beta", "gamma"]);
+  assert.deepEqual(ls.map((l) => l.id), ["kiwi/remote", "alpha", "beta", "gamma"]);
   const a = ls.find((l) => l.id === "alpha");
   assert.equal(a.goal, "Ship alpha"); assert.equal(a.yours, 1); assert.equal(a.agentTasks, 1); assert.equal(a.agents, 2);
   assert.ok(a.live && a.local);
@@ -27,7 +27,7 @@ test("currentLoop: pinned, else focused, else first", () => {
   const ls = allLoops(disk, live);
   assert.equal(currentLoop({ pinned: "beta" }, ls, "alpha"), "beta");
   assert.equal(currentLoop({ pinned: "gone" }, ls, "alpha"), "alpha");
-  assert.equal(currentLoop({ pinned: null }, ls, null), "ska/remote");
+  assert.equal(currentLoop({ pinned: null }, ls, null), "kiwi/remote");
   assert.equal(currentLoop({ pinned: null }, [], null), null);
 });
 
@@ -40,7 +40,7 @@ test("loopRows shows goals, your todo, agents' tasks, agents and context", () =>
   const empty = loopRows("beta", disk[1], null);
   assert.ok(empty.some((r) => r.text === "Nothing for you."));
   assert.ok(empty.some((r) => r.text === "No live terminals in this loop."));
-  assert.ok(loopRows("ska/remote", null, live[1]).some((r) => r.text.startsWith("Its folder couldn't be read")));
+  assert.ok(loopRows("kiwi/remote", null, live[1]).some((r) => r.text.startsWith("Its folder couldn't be read")));
   assert.equal(loopRows(null)[0].kind, "empty");
 });
 
@@ -116,15 +116,15 @@ test("keyName normalizes gpui key events and leaves chords to Herdr", () => {
 });
 
 test("other machines: keys join live loops, a remote terminal's loop is found, keys split", () => {
-  const remote = onMachine([{ id: "hub", goals: [{ n: 1, text: "Hub" }], dirs: [], projects: [], tasks: { yours: [{ n: 1, text: "Check" }], agents: [] }, touched: 1 }], "vana");
-  assert.equal(remote[0].id, "vana/hub");
-  const ls = allLoops(remote, [{ id: "vana/hub", goal: "Hub", coordinator: "vana/t29", needsYou: 0, lastWithYou: 5, rows: [] }]);
+  const remote = onMachine([{ id: "hub", goals: [{ n: 1, text: "Hub" }], dirs: [], projects: [], tasks: { yours: [{ n: 1, text: "Check" }], agents: [] }, touched: 1 }], "fern");
+  assert.equal(remote[0].id, "fern/hub");
+  const ls = allLoops(remote, [{ id: "fern/hub", goal: "Hub", coordinator: "fern/t29", needsYou: 0, lastWithYou: 5, rows: [] }]);
   assert.equal(ls.length, 1); assert.ok(ls[0].live && ls[0].local); assert.equal(ls[0].yours, 1);
-  const terms = [{ address: "vana/t29", labels: { omniloop: "hub" } }, { address: "t1", labels: { omniloop: "here" } }, { address: "t2", labels: {} }];
-  assert.equal(loopOfTerminal(terms, "vana/t29"), "vana/hub");
+  const terms = [{ address: "fern/t29", labels: { omniloop: "hub" } }, { address: "t1", labels: { omniloop: "here" } }, { address: "t2", labels: {} }];
+  assert.equal(loopOfTerminal(terms, "fern/t29"), "fern/hub");
   assert.equal(loopOfTerminal(terms, "t1"), "here");
   assert.equal(loopOfTerminal(terms, "t2"), null);
-  assert.deepEqual(splitLoop("vana/hub"), { machine: "vana", id: "hub" });
+  assert.deepEqual(splitLoop("fern/hub"), { machine: "fern", id: "hub" });
   assert.deepEqual(splitLoop("here"), { machine: null, id: "here" });
   assert.deepEqual(onMachine(null, "x"), []);
 });
@@ -136,7 +136,7 @@ test("instructions: has, none, and unchecked are kept apart", () => {
   assert.equal(has.state, "has"); assert.equal(has.text, "CLAUDE.md · 1 skill"); assert.equal(has.files.length, 2);
   assert.equal(instructions({ checked: true, skills: [], agentDefs: [] }).state, "none");
   assert.equal(instructions(null).state, "unchecked");
-  assert.equal(instructions(undefined, "vana").text, "not checked (on vana)");
+  assert.equal(instructions(undefined, "fern").text, "not checked (on fern)");
   assert.equal(instructions({ checked: true, missing: true }).state, "unchecked");
 });
 
@@ -155,7 +155,7 @@ test("context rows unfold their files on Enter; a file opens, a remote one only 
   assert.equal(file.path, "/r/alpha/CLAUDE.md");
   s.sel.loop = rows.filter((r) => r.pick).findIndex((r) => r.kind === "file");
   assert.deepEqual(step(s, "enter", rows).action, { type: "open-file", path: "/r/alpha/CLAUDE.md" });
-  const remote = loopRows("vana/alpha", { ...d, machine: "vana" }, null, s.open);
+  const remote = loopRows("fern/alpha", { ...d, machine: "fern" }, null, s.open);
   const rs = { ...s, sel: { ...s.sel, loop: remote.filter((r) => r.pick).findIndex((r) => r.kind === "file") } };
   assert.equal(step(rs, "enter", remote).action.type, "note");
   // old-format remote lister: plain project names, no files → not checked
@@ -190,7 +190,7 @@ test("chooserRows: filters, marks what the loop has, offers a typed path", () =>
 test("placeOf puts a folder's own name first and shortens any home to ~", () => {
   assert.deepEqual(placeOf("/Users/jane.doe@example.com/repos/claude-stuff"), { name: "claude-stuff", where: "~/repos" });
   assert.deepEqual(placeOf("/home/r/loops/proj/"), { name: "proj", where: "~/loops" });
-  assert.deepEqual(placeOf("/Users/r"), { name: "~", where: "" });
+  assert.deepEqual(placeOf("/Users/jane"), { name: "~", where: "" });
   assert.deepEqual(placeOf("/opt/x"), { name: "x", where: "/opt" });
   assert.deepEqual(placeOf("/x"), { name: "x", where: "/" });
   const rows = loopRows("alpha", { ...disk[0], notes: { checked: true, claude: "/l/CLAUDE.md", skills: [], agentDefs: [] } }, null);
@@ -201,7 +201,7 @@ test("placeOf puts a folder's own name first and shortens any home to ~", () => 
 });
 
 test("a folder the loop works on in its own copy (git worktree) carries the copy and branch", () => {
-  const d = { ...disk[0], dirs: [{ path: "/Users/r/repos/omniloop", machine: null, worktree: "/Users/r/loops/alpha/wt/omniloop", branch: "alpha/work", base: "abc1234", dirty: [] }] };
+  const d = { ...disk[0], dirs: [{ path: "/Users/jane/repos/omniloop", machine: null, worktree: "/Users/jane/loops/alpha/wt/omniloop", branch: "alpha/work", base: "abc1234", dirty: [] }] };
   const row = loopRows("alpha", d, null).find((r) => r.kind === "dir");
   assert.equal(row.name, "omniloop"); assert.equal(row.where, "~/repos");
   assert.deepEqual(row.copy, { name: "omniloop", where: "~/loops/alpha/wt" });
