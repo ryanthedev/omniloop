@@ -130,3 +130,17 @@ export function cleanTitle(title) {
   const s = String(title ?? "").replace(/^[^\p{L}\p{N}]+/u, "").trim();
   return !s || /^\S+@\S+:/.test(s) ? null : s;
 }
+
+/** The loop bar's label for a member: the Herdr tab's name when that tab was explicitly named (and the member has
+ *  a pane in this window), else the member's own name. `tab` is a spaces() tab ({name, named}) or null. */
+export function memberLabel(member, tab) {
+  return tab?.named && tab.name ? tab.name : member.name;
+}
+
+/** What the loop bar's × should run for a member's pane: close just that pane when its tab holds other panes
+ *  (a split), else close the whole tab. `allPanes` is panes(); returns [command, args], or null with no pane. */
+export function closeCommand(allPanes, pane) {
+  if (!pane) return null;
+  const inTab = allPanes.filter((p) => p.tab === pane.tab).length;
+  return inTab > 1 ? ["pane.close", { pane: pane.pane }] : ["tab.close", { id: pane.tab }];
+}

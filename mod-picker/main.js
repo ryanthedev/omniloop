@@ -29,6 +29,7 @@ import { Help, isHelpKey } from "./help/help.js";
 const LOOPS_SHOWN = 8, FOLDERS_SHOWN = 10;
 // Context folders on a machine: its repos, plus ~/.config ($HOME is that machine's own).
 const FOLDERS_SH = 'find "$HOME/repos" -mindepth 1 -maxdepth 1 -type d ! -name ".*" 2>/dev/null | sort; echo "$HOME/.config"';
+const STILL_READING = (key) => `Still reading your loop folders… ${key} will show in a moment.`;
 const PLACEHOLDER = {
   ask: "Search your loops, or describe something new…  (? for controls)",
   machine: "Enter picks the machine under the cursor",
@@ -86,7 +87,15 @@ export default class OmniloopPicker extends View {
       // ⌘↵ pressed before the machines were known: go on now, so the machine step isn't skipped.
       if (this.pendingNew != null) { const g = this.pendingNew; this.pendingNew = null; this.startNew(g, cx); }
       cx.notify();
-      try { this.index = JSON.parse((await exec(`${BIN}/omniloop`, ["index"], { timeout: 10000 })).stdout || "[]"); this.indexState = "loaded"; } catch { this.indexState = "failed"; }
+      // exec resolves (not rejects) on a non-zero exit, so check the code and the shape before calling it loaded.
+      try {
+        const r = await exec(`${BIN}/omniloop`, ["index"], { timeout: 10000 });
+        const parsed = r.code !== 0 ? null : JSON.parse(r.stdout || "[]");
+        if (!Array.isArray(parsed)) throw new Error("index failed");
+        this.index = parsed; this.indexState = "loaded";
+      } catch { this.indexState = "failed"; }
+      // The "still reading" note from open() is stale now that the index has settled.
+      if (this.error === STILL_READING(this.stillReadingKey)) this.error = null;
       cx.notify();
       await this.loadContext(null);
       cx.notify();
@@ -114,7 +123,7 @@ export default class OmniloopPicker extends View {
   // ---- loops ----
 
   open(entry, cx) {
-    if (entry.placeholder) { this.error = entry.placeholder === "loading" ? `Still reading your loop folders… ${entry.key} will show in a moment.` : "Couldn't read your loop folders, so this pin can't be opened from here."; cx?.notify(); return; }
+    if (entry.placeholder) { this.error = entry.placeholder === "loading" ? (this.stillReadingKey = entry.key, STILL_READING(entry.key)) : "Couldn't read your loop folders, so this pin can't be opened from here."; cx?.notify(); return; }
     if (entry.stale) { this.error = `Pinned at ${entry.pin}, but ${entry.key} isn't found${entry.machine ? ` (nobody is running in it on ${entry.machine})` : ""}. ⌘P unpins it.`; cx?.notify(); return; }
     if (entry.lead) { this.close(); run("pane.focus", { terminal: entry.lead }); return; }
     // Nobody is running in it: start a fresh lead that catches up from the loop's notes (omniloop revive).
@@ -458,9 +467,9 @@ export default class OmniloopPicker extends View {
   }
 
   /** The hovered loop's entry, looked up in the current rows (null when it has gone, or outside the search step). */
-  hoveredEntry() {
+  hoveredEntry(rows = this.rows()) {
     if (this.step !== "ask" || !this.hovered) return null;
-    return this.rows().find((r) => r.kind === "loop" && r.entry.key === this.hovered)?.entry ?? null;
+    return rows.find((r) => r.kind === "loop" && r.entry.key === this.hovered)?.entry ?? null;
   }
 
   /** The preview card for the hovered loop: goal, sessions with their status, recent chat, the lead's screen. */
@@ -527,6 +536,7 @@ export default class OmniloopPicker extends View {
     if (this.jumping) return div();
     const t = theme();
     const rows = this.rows();
+    const hovered = this.hoveredEntry(rows);
     const list = this.step === "ask" || this.step === "goal";
     const { at, start, shown } = this.window(rows, list ? LOOPS_SHOWN : FOLDERS_SHOWN);
     this.at = at;
@@ -582,7 +592,7 @@ export default class OmniloopPicker extends View {
         })))
         .when(rows.length > shown.length, (el) => el.child(div().px(4).text_size(11.5).text_color(t.dim).child(`${rows.length - shown.length} more; keep typing to narrow`))))
         .when(this.step === "ask", (el) => el.child(div().w(360).flex_none().pt(96).pr(20)
-          .child(this.hoveredEntry() ? this.preview(t, this.hoveredEntry()) : div().pt(150).px(16).text_size(12).text_color(t.dim).child("Hover a loop to preview it")))))
+          .child(hovered ? this.preview(t, hovered) : div().pt(150).px(16).text_size(12).text_color(t.dim).child("Hover a loop to preview it")))))
       .child(div().flex_1())
       .child(h_flex().pb(22).gap(10).items_center()
         .child(div().text_size(12).text_color(t.dim).child(this.hints()))

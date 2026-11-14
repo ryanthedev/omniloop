@@ -68,7 +68,7 @@ export const KEYS = [
     ["click", "a session: jump there, in any space"],
     ["dbl-click", "rename a session's tab (one with a tab in this window)"],
     ["right-click", "tab menu (same)"],
-    ["×", "close the active session's tab (same)"],
+    ["×", "close that session (just its pane when the tab is split)"],
     ["wheel", "next / previous tab"],
     ["◎ name", "the loop you're in; outside a loop it's the space's own tabs"],
   ]],

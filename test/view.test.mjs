@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildView, watcherOf } from "../core/view.js";
+import { buildView, watcherOf, memberLabel, closeCommand } from "../core/view.js";
 
 const T = (address, status, labels = {}, extra = {}) => ({ address, state: "live", status, labels, created_ms: 0, ...extra });
 
@@ -94,4 +94,18 @@ test("loop forYouCounts match the row chips: routed plus the watcher's extras, n
   const none = buildView(terms, null, 2000).loops[0];
   assert.equal(none.needsYou, 1);
   assert.equal(none.forYouLabel, "1 finished");
+});
+
+test("memberLabel prefers an explicitly named tab, else the member's name", () => {
+  assert.equal(memberLabel({ name: "builder" }, { name: "mine", named: true }), "mine");
+  assert.equal(memberLabel({ name: "builder" }, { name: "tb3", named: false }), "builder");
+  assert.equal(memberLabel({ name: "builder" }, null), "builder");
+  assert.equal(memberLabel({ name: "builder" }, { name: "", named: true }), "builder");
+});
+
+test("closeCommand closes the pane when its tab is split, else the tab", () => {
+  const ps = [{ pane: "p1", tab: "a" }, { pane: "p2", tab: "a" }, { pane: "p3", tab: "b" }];
+  assert.deepEqual(closeCommand(ps, ps[0]), ["pane.close", { pane: "p1" }]);
+  assert.deepEqual(closeCommand(ps, ps[2]), ["tab.close", { id: "b" }]);
+  assert.equal(closeCommand(ps, undefined), null);
 });
