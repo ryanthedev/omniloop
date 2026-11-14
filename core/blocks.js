@@ -4,9 +4,9 @@
 
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** Positions of `marker` where it starts a line and ends it (trailing blanks allowed). */
+/** Positions of `marker` where it starts a line and ends it (trailing blanks, a CR allowed). Only \n breaks a line. */
 function lineStarts(text, marker) {
-  return [...text.matchAll(new RegExp(`^${esc(marker)}[ \\t]*\\r?$`, "gm"))].map((m) => m.index);
+  return [...text.matchAll(new RegExp(`(?<=^|\\n)${esc(marker)}[ \\t]*\\r?(?=\\n|$)`, "g"))].map((m) => m.index);
 }
 
 const MARKER_LINE = /^<!-- \/?omniloop:\w+ -->[ \t]*\r?$/;
@@ -21,8 +21,7 @@ function defuse(body, start, end) {
  * Put `body` (the block, markers included) between `start` and `end` in `text`.
  * - one clean pair: what is between them is replaced, every other byte stays;
  * - no markers at all: `anchor(text, body)` returns the text with the block inserted;
- * - anything else (one marker alone on its line, duplicates, wrong order): the text comes back unchanged.
-Text that merely quotes a marker mid-line is not a marker.
+ * - anything else (one marker alone on its line, duplicates, wrong order): the text comes back unchanged. * Text that merely quotes a marker mid-line is not a marker.
  * Returns { text, note }; note is null unless the markers are damaged.
  */
 export function replaceBlock(text, start, end, body, anchor) {

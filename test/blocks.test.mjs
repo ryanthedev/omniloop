@@ -84,6 +84,31 @@ test("replaceBlock: a mid-line quote does not stop a clean pair from being repla
 
 const m = newManifest({ id: "q", goal: "g", dirs: ["/home/jane/repos/app"] });
 
+for (const [name, br] of [["CR", "\r"], ["U+2028", "\u2028"], ["U+2029", "\u2029"]]) {
+  test(`withProjectsBlock: a ${name}-separated end marker in a project text is no marker; refreshes twice and edits still land`, () => {
+    const ctx = [{ name: "s", text: `intro${br}${PROJECTS_END}${br}more` }];
+    const once = withProjectsBlock("# T\n", ctx);
+    const notes = [];
+    assert.equal(withProjectsBlock(once, ctx, notes), once);
+    assert.deepEqual(notes, []);
+    const edited = withProjectsBlock(once, [{ name: "s", text: "edited" }], notes);
+    assert.deepEqual(notes, []);
+    assert.ok(edited.includes("edited") && !edited.includes("more"));
+  });
+}
+
+test("hand text with a CR-separated goal marker is not damage", () => {
+  const md = withGoalBlock(claudeMd(m), m) + "\na\r<!-- omniloop:goal -->\rb\n";
+  const notes = [];
+  assert.equal(withGoalBlock(md, m, notes), md);
+  assert.deepEqual(notes, []);
+});
+
+test("replaceBlock: CRLF marker lines still count, a lone CR never starts a line", () => {
+  assert.equal(replaceBlock(`a\r\n${S}\r\nx\r\n${E}\r\n`, S, E, `${S}\nn\n${E}`, append).note, null);
+  assert.equal(replaceBlock(`a\r${S}\r${E}`, S, E, "B", (t) => t + "!").text, `a\r${S}\r${E}!`);
+});
+
 test("updateClaudeMd, withGoalBlock, withProjectsBlock: damaged markers leave the text alone and add a note", () => {
   const md = claudeMd(m);
   const hurt = (marker) => md.replace(marker, "");
